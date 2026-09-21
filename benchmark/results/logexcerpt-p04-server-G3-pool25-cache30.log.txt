@@ -1,0 +1,2 @@
+      1 time=2026-09-20T17:23:57.615+08:00 level=ERROR msg="server exited with error" error="ERROR: could not open file \"base/15109/24576\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:23:57.451+08:00 level=INFO msg="postgres pool configured" max_conns=25 min_conns=5 max_conn_lifetime=1h0m0s max_conn_idle_time=30m0s connect_timeout=5s worker_count=20

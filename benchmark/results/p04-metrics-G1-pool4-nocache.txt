@@ -1,0 +1,273 @@
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 0
+go_gc_duration_seconds{quantile="0.25"} 0
+go_gc_duration_seconds{quantile="0.5"} 0
+go_gc_duration_seconds{quantile="0.75"} 0.0005292
+go_gc_duration_seconds{quantile="1"} 0.0012535
+go_gc_duration_seconds_sum 0.0249444
+go_gc_duration_seconds_count 110
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+# HELP go_gc_gomemlimit_bytes Go runtime memory limit configured by the user, otherwise math.MaxInt64. This value is set by the GOMEMLIMIT environment variable, and the runtime/debug.SetMemoryLimit function. Sourced from /gc/gomemlimit:bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes 9.223372036854776e+18
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 53
+# HELP go_info Information about the Go environment.
+# TYPE go_info gauge
+go_info{version="go1.27.1"} 1
+# HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes 3.6295568e+07
+# HELP go_memstats_alloc_bytes_total Total number of bytes allocated in heap until now, even if released already. Equals to /gc/heap/allocs:bytes.
+# TYPE go_memstats_alloc_bytes_total counter
+go_memstats_alloc_bytes_total 6.87960368e+08
+# HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table. Equals to /memory/classes/profiling/buckets:bytes.
+# TYPE go_memstats_buck_hash_sys_bytes gauge
+go_memstats_buck_hash_sys_bytes 8092
+# HELP go_memstats_frees_total Total number of heap objects frees. Equals to /gc/heap/frees:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_frees_total counter
+go_memstats_frees_total 5.421624e+06
+# HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata. Equals to /memory/classes/metadata/other:bytes.
+# TYPE go_memstats_gc_sys_bytes gauge
+go_memstats_gc_sys_bytes 4.18864e+06
+# HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use, same as go_memstats_alloc_bytes. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 3.6295568e+07
+# HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used. Equals to /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_idle_bytes gauge
+go_memstats_heap_idle_bytes 1.5876096e+07
+# HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes
+# TYPE go_memstats_heap_inuse_bytes gauge
+go_memstats_heap_inuse_bytes 4.4580864e+07
+# HELP go_memstats_heap_objects Number of currently allocated objects. Equals to /gc/heap/objects:objects.
+# TYPE go_memstats_heap_objects gauge
+go_memstats_heap_objects 159468
+# HELP go_memstats_heap_released_bytes Number of heap bytes released to OS. Equals to /memory/classes/heap/released:bytes.
+# TYPE go_memstats_heap_released_bytes gauge
+go_memstats_heap_released_bytes 1.236992e+07
+# HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes + /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_sys_bytes gauge
+go_memstats_heap_sys_bytes 6.045696e+07
+# HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
+# TYPE go_memstats_last_gc_time_seconds gauge
+go_memstats_last_gc_time_seconds 1.7898957442432537e+09
+# HELP go_memstats_mallocs_total Total number of heap objects allocated, both live and gc-ed. Semantically a counter version for go_memstats_heap_objects gauge. Equals to /gc/heap/allocs:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_mallocs_total counter
+go_memstats_mallocs_total 5.581092e+06
+# HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures. Equals to /memory/classes/metadata/mcache/inuse:bytes.
+# TYPE go_memstats_mcache_inuse_bytes gauge
+go_memstats_mcache_inuse_bytes 72448
+# HELP go_memstats_mcache_sys_bytes Number of bytes used for mcache structures obtained from system. Equals to /memory/classes/metadata/mcache/inuse:bytes + /memory/classes/metadata/mcache/free:bytes.
+# TYPE go_memstats_mcache_sys_bytes gauge
+go_memstats_mcache_sys_bytes 79240
+# HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures. Equals to /memory/classes/metadata/mspan/inuse:bytes.
+# TYPE go_memstats_mspan_inuse_bytes gauge
+go_memstats_mspan_inuse_bytes 809920
+# HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system. Equals to /memory/classes/metadata/mspan/inuse:bytes + /memory/classes/metadata/mspan/free:bytes.
+# TYPE go_memstats_mspan_sys_bytes gauge
+go_memstats_mspan_sys_bytes 816000
+# HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place. Equals to /gc/heap/goal:bytes.
+# TYPE go_memstats_next_gc_bytes gauge
+go_memstats_next_gc_bytes 4.6231306e+07
+# HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations. Equals to /memory/classes/other:bytes.
+# TYPE go_memstats_other_sys_bytes gauge
+go_memstats_other_sys_bytes 6.77414e+06
+# HELP go_memstats_stack_inuse_bytes Number of bytes obtained from system for stack allocator in non-CGO environments. Equals to /memory/classes/heap/stacks:bytes.
+# TYPE go_memstats_stack_inuse_bytes gauge
+go_memstats_stack_inuse_bytes 6.651904e+06
+# HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator. Equals to /memory/classes/heap/stacks:bytes + /memory/classes/os-stacks:bytes.
+# TYPE go_memstats_stack_sys_bytes gauge
+go_memstats_stack_sys_bytes 6.651904e+06
+# HELP go_memstats_sys_bytes Number of bytes obtained from system. Equals to /memory/classes/total:byte.
+# TYPE go_memstats_sys_bytes gauge
+go_memstats_sys_bytes 7.8974976e+07
+# HELP go_sched_gomaxprocs_threads The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously. Sourced from /sched/gomaxprocs:threads.
+# TYPE go_sched_gomaxprocs_threads gauge
+go_sched_gomaxprocs_threads 32
+# HELP go_threads Number of OS threads created.
+# TYPE go_threads gauge
+go_threads 41
+# HELP nebulaflow_db_pool_acquired_conns 正在被使用的连接数
+# TYPE nebulaflow_db_pool_acquired_conns gauge
+nebulaflow_db_pool_acquired_conns 0
+# HELP nebulaflow_db_pool_canceled_acquire_total 等待连接期间被 context 取消的累计次数（吞吐上不去的直接证据）
+# TYPE nebulaflow_db_pool_canceled_acquire_total counter
+nebulaflow_db_pool_canceled_acquire_total 0
+# HELP nebulaflow_db_pool_constructing_conns 正在建立的连接数
+# TYPE nebulaflow_db_pool_constructing_conns gauge
+nebulaflow_db_pool_constructing_conns 0
+# HELP nebulaflow_db_pool_empty_acquire_total 池内无空闲连接而必须等待的累计次数（持续增长 ⇒ 池太小或查询占用过久）
+# TYPE nebulaflow_db_pool_empty_acquire_total counter
+nebulaflow_db_pool_empty_acquire_total 96187
+# HELP nebulaflow_db_pool_idle_conns 连接池中的空闲连接数
+# TYPE nebulaflow_db_pool_idle_conns gauge
+nebulaflow_db_pool_idle_conns 4
+# HELP nebulaflow_db_pool_max_conns 连接池配置的连接数上限
+# TYPE nebulaflow_db_pool_max_conns gauge
+nebulaflow_db_pool_max_conns 4
+# HELP nebulaflow_db_pool_new_conns_total 累计新建连接数（稳态下应几乎不增长）
+# TYPE nebulaflow_db_pool_new_conns_total counter
+nebulaflow_db_pool_new_conns_total 4
+# HELP nebulaflow_db_pool_total_conns 连接池中的连接总数（空闲 + 使用中 + 正在建立）
+# TYPE nebulaflow_db_pool_total_conns gauge
+nebulaflow_db_pool_total_conns 4
+# HELP nebulaflow_http_request_duration_seconds HTTP 请求耗时
+# TYPE nebulaflow_http_request_duration_seconds histogram
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.005"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.01"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.025"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.05"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.1"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.25"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="0.5"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="1"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="2.5"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="5"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="10"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/api/workflows",le="+Inf"} 1
+nebulaflow_http_request_duration_seconds_sum{method="GET",path="/api/workflows"} 0.0457223
+nebulaflow_http_request_duration_seconds_count{method="GET",path="/api/workflows"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.005"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.01"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.025"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.05"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.1"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.25"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="0.5"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="1"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="2.5"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="5"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="10"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="GET",path="/healthz",le="+Inf"} 2
+nebulaflow_http_request_duration_seconds_sum{method="GET",path="/healthz"} 0
+nebulaflow_http_request_duration_seconds_count{method="GET",path="/healthz"} 2
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.005"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.01"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.025"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.05"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.1"} 0
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.25"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="0.5"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="1"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="2.5"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="5"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="10"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/auth/login",le="+Inf"} 1
+nebulaflow_http_request_duration_seconds_sum{method="POST",path="/api/auth/login"} 0.1098889
+nebulaflow_http_request_duration_seconds_count{method="POST",path="/api/auth/login"} 1
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.005"} 1128
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.01"} 3586
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.025"} 3767
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.05"} 3827
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.1"} 3967
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.25"} 3983
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="0.5"} 4047
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="1"} 4100
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="2.5"} 4100
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="5"} 4100
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="10"} 4100
+nebulaflow_http_request_duration_seconds_bucket{method="POST",path="/api/tasks",le="+Inf"} 4100
+nebulaflow_http_request_duration_seconds_sum{method="POST",path="/api/tasks"} 96.19699260000054
+nebulaflow_http_request_duration_seconds_count{method="POST",path="/api/tasks"} 4100
+# HELP nebulaflow_http_requests_total HTTP 请求总量
+# TYPE nebulaflow_http_requests_total counter
+nebulaflow_http_requests_total{method="GET",path="/api/workflows",status="2xx"} 1
+nebulaflow_http_requests_total{method="GET",path="/healthz",status="2xx"} 2
+nebulaflow_http_requests_total{method="POST",path="/api/auth/login",status="2xx"} 1
+nebulaflow_http_requests_total{method="POST",path="/api/tasks",status="2xx"} 4099
+nebulaflow_http_requests_total{method="POST",path="/api/tasks",status="5xx"} 1
+# HELP nebulaflow_llm_request_duration_seconds LLM 调用耗时
+# TYPE nebulaflow_llm_request_duration_seconds histogram
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="0.05"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="0.1"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="0.25"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="0.5"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="1"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="2.5"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="5"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="10"} 8196
+nebulaflow_llm_request_duration_seconds_bucket{provider="llm",le="+Inf"} 8196
+nebulaflow_llm_request_duration_seconds_sum{provider="llm"} 0
+nebulaflow_llm_request_duration_seconds_count{provider="llm"} 8196
+# HELP nebulaflow_llm_requests_total LLM 调用总量
+# TYPE nebulaflow_llm_requests_total counter
+nebulaflow_llm_requests_total{model="mock-chat",provider="llm",result="success"} 8196
+# HELP nebulaflow_llm_tokens_total LLM token 用量
+# TYPE nebulaflow_llm_tokens_total counter
+nebulaflow_llm_tokens_total{direction="in",provider="llm"} 475368
+nebulaflow_llm_tokens_total{direction="out",provider="llm"} 315546
+# HELP nebulaflow_queue_admit_limit 准入阈值（达到即拒绝新提交），0 表示背压已关闭
+# TYPE nebulaflow_queue_admit_limit gauge
+nebulaflow_queue_admit_limit 0
+# HELP nebulaflow_queue_dlq_len 死信队列物理长度
+# TYPE nebulaflow_queue_dlq_len gauge
+nebulaflow_queue_dlq_len 1
+# HELP nebulaflow_queue_max_len 任务队列配置的容量上界（MAXLEN），与 stream_len 一起用于水位告警
+# TYPE nebulaflow_queue_max_len gauge
+nebulaflow_queue_max_len 1e+06
+# HELP nebulaflow_queue_reclaimed_entries_total 已确认前缀累计回收的条目数
+# TYPE nebulaflow_queue_reclaimed_entries_total counter
+nebulaflow_queue_reclaimed_entries_total 4099
+# HELP nebulaflow_queue_rejected_total 被背压拒绝的提交数（HTTP 503）
+# TYPE nebulaflow_queue_rejected_total counter
+nebulaflow_queue_rejected_total 0
+# HELP nebulaflow_queue_stream_len 任务队列 stream 的物理长度（含已 ACK 但尚未回收的条目）
+# TYPE nebulaflow_queue_stream_len gauge
+nebulaflow_queue_stream_len 0
+# HELP nebulaflow_worker_active 活跃 worker 数
+# TYPE nebulaflow_worker_active gauge
+nebulaflow_worker_active 0
+# HELP nebulaflow_worker_queue_size 等待执行的节点任务数
+# TYPE nebulaflow_worker_queue_size gauge
+nebulaflow_worker_queue_size 0
+# HELP nebulaflow_workflow_cache_errors_total 缓存读写或反序列化失败的次数（缓存降级但不影响请求）
+# TYPE nebulaflow_workflow_cache_errors_total counter
+nebulaflow_workflow_cache_errors_total 0
+# HELP nebulaflow_workflow_cache_hits_total 工作流读取缓存命中次数
+# TYPE nebulaflow_workflow_cache_hits_total counter
+nebulaflow_workflow_cache_hits_total 0
+# HELP nebulaflow_workflow_cache_misses_total 工作流读取缓存未命中（回源数据库）次数
+# TYPE nebulaflow_workflow_cache_misses_total counter
+nebulaflow_workflow_cache_misses_total 0
+# HELP nebulaflow_workflow_task_duration_seconds Workflow 任务执行时长
+# TYPE nebulaflow_workflow_task_duration_seconds histogram
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="0.1"} 4020
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="0.5"} 4078
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="1"} 4079
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="2"} 4079
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="5"} 4099
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="10"} 4099
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="30"} 4099
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="60"} 4099
+nebulaflow_workflow_task_duration_seconds_bucket{workflow_id="1",le="+Inf"} 4099
+nebulaflow_workflow_task_duration_seconds_sum{workflow_id="1"} 303.5505784000006
+nebulaflow_workflow_task_duration_seconds_count{workflow_id="1"} 4099
+# HELP nebulaflow_workflow_tasks_running 当前执行中的任务数
+# TYPE nebulaflow_workflow_tasks_running gauge
+nebulaflow_workflow_tasks_running 0
+# HELP nebulaflow_workflow_tasks_total Workflow 任务总数（按最终状态）
+# TYPE nebulaflow_workflow_tasks_total counter
+nebulaflow_workflow_tasks_total{status="failed"} 1
+nebulaflow_workflow_tasks_total{status="succeeded"} 4098
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 27.359375
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 1.6777216e+07
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 551
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 8.3296256e+07
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.789895714e+09
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 1.14429952e+08

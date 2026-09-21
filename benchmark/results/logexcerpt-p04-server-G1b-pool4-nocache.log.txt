@@ -1,0 +1,6 @@
+      1 time=2026-09-20T16:15:03.364+08:00 level=INFO msg="database pool recovered" acquired=0 max=4
+      1 time=2026-09-20T16:14:34.803+08:00 level=INFO msg="task finished" task_id=7548 status=failed error="rag node: ERROR: could not open file \"base/15109/24737\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T16:14:34.777+08:00 level=WARN msg="worker node failed" task_id=7548 node=rag error="rag node: ERROR: could not open file \"base/15109/24737\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T16:14:34.478+08:00 level=ERROR msg="update task node failed" task_id=7552 node=parser status=succeeded error="ERROR: could not open file \"base/15109/6104\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T16:14:33.364+08:00 level=WARN msg="database pool saturated" acquired=4 max=4 empty_acquire_total=41 canceled_acquire_total=0 hint="调大 DB_MAX_CONNS（并确认 PG 的 max_connections 留有余量）"
+      1 time=2026-09-20T16:14:26.313+08:00 level=INFO msg="postgres pool configured" max_conns=4 min_conns=5 max_conn_lifetime=1h0m0s max_conn_idle_time=30m0s connect_timeout=5s worker_count=20

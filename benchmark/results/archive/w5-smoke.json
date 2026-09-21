@@ -1,0 +1,44 @@
+{
+  "label": "workers=5 consumers=follow-workers",
+  "worker_count": 5,
+  "concurrency": 20,
+  "workflow_id": 26,
+  "started_at": "2026-09-18T23:34:28+08:00",
+  "submit": {
+    "requests": 300,
+    "ok": 300,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 0.022,
+    "rps": 13410.9,
+    "status_codes": {
+      "201": 300
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 1.3,
+      "p50_ms": 1.07,
+      "p90_ms": 2.16,
+      "p95_ms": 2.73,
+      "p99_ms": 3.85,
+      "max_ms": 5.43
+    }
+  },
+  "drain": {
+    "seconds": 2.856,
+    "succeeded": 330,
+    "failed": 0,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 115.5,
+    "end_to_end_latency": {
+      "min_ms": 41.78,
+      "mean_ms": 1378.15,
+      "p50_ms": 1355.78,
+      "p90_ms": 2472.75,
+      "p95_ms": 2597.49,
+      "p99_ms": 2720.46,
+      "max_ms": 2720.46
+    }
+  }
+}

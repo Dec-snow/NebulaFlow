@@ -1,0 +1,45 @@
+{
+  "label": "P0-5 F1-off",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 26,
+  "started_at": "2026-09-20T14:59:36+08:00",
+  "submit": {
+    "requests": 20000,
+    "ok": 20000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 1.176,
+    "rps": 17003.3,
+    "status_codes": {
+      "201": 20000
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 2.18,
+      "p50_ms": 2.06,
+      "p90_ms": 3.57,
+      "p95_ms": 4.21,
+      "p99_ms": 5.79,
+      "max_ms": 12.14
+    }
+  },
+  "drain": {
+    "seconds": 60.104,
+    "succeeded": 10562,
+    "failed": 0,
+    "pending": 9488,
+    "completion_rate": 52.68,
+    "task_throughput_per_sec": 175.7,
+    "end_to_end_latency": {
+      "min_ms": 41.7,
+      "mean_ms": 12706.52,
+      "p50_ms": 12663.87,
+      "p90_ms": 23440.42,
+      "p95_ms": 24780.69,
+      "p99_ms": 25866.57,
+      "max_ms": 26128.74
+    },
+    "note": "等待超时，仍有 9488 个任务未进入终态"
+  }
+}

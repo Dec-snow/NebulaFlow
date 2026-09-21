@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NebulaFlow · Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // 防主题闪烁：首帧之前就把 <html>.dark 定下来。
+      // 否则浅色主题用户会看到一瞬深色底，深色用户会看到一瞬白闪。
+      (function () {
+        try {
+          var saved = localStorage.getItem("nf-theme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var dark = saved === "dark" || ((!saved || saved === "system") && prefersDark);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {
+          /* localStorage 不可用时静默降级为浅色 */
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-Bv8eN9os.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CuDtyNCU.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

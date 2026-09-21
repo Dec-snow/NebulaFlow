@@ -1,0 +1,45 @@
+{
+  "label": "P0-2-E-guardrail10000",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 26,
+  "started_at": "2026-09-20T14:40:51+08:00",
+  "submit": {
+    "requests": 20000,
+    "ok": 20000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 1.137,
+    "rps": 17592.1,
+    "status_codes": {
+      "201": 20000
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 2,
+      "p50_ms": 1.85,
+      "p90_ms": 3.35,
+      "p95_ms": 3.86,
+      "p99_ms": 5.08,
+      "max_ms": 10.89
+    }
+  },
+  "drain": {
+    "seconds": 120.761,
+    "succeeded": 10564,
+    "failed": 0,
+    "pending": 9636,
+    "completion_rate": 52.3,
+    "task_throughput_per_sec": 87.5,
+    "end_to_end_latency": {
+      "min_ms": 40.31,
+      "mean_ms": 12518.6,
+      "p50_ms": 12513.45,
+      "p90_ms": 23096.43,
+      "p95_ms": 24374.83,
+      "p99_ms": 25440.37,
+      "max_ms": 25731.95
+    },
+    "note": "等待超时，仍有 9636 个任务未进入终态"
+  }
+}

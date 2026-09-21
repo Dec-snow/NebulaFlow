@@ -1,0 +1,123 @@
+# NebulaFlow 一键编排：应用 + PostgreSQL + Redis + Prometheus + Grafana
+version: "3.9"
+
+services:
+  postgres:
+    # 必须是带 pgvector 的镜像：RAG 检索依赖 vector 类型与 HNSW 索引，
+    # 官方 postgres:16-alpine 不含该扩展，迁移会直接失败。
+    # 版本要求 ≥ 0.8.0：多租户检索靠 hnsw.iterative_scan 消除后置过滤漏召回
+    # （更老的版本会把它当成未定义占位 GUC 静默忽略）。pg16 标签跟的是最新版。
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: nebula
+      POSTGRES_PASSWORD: nebula
+      POSTGRES_DB: nebulaflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nebula -d nebulaflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: prod
+      PORT: "8080"
+      DATABASE_URL: postgres://nebula:nebula@postgres:5432/nebulaflow?sslmode=disable
+      # 连接池：pgxpool 默认 max(4, NumCPU) 会随机器核数漂移，必须显式固定。
+      # 容器里 NumCPU 取决于宿主与 cpuset，默认值尤其不可预期。
+      # MaxConns 应当 >= WORKER_COUNT，否则 worker 会全堵在池上排队。
+      # 注意 PostgreSQL 默认 max_connections=100，多副本部署时按副本数留余量。
+      DB_MAX_CONNS: "25"
+      DB_MIN_CONNS: "5"
+      DB_MAX_CONN_LIFETIME: "1h"
+      DB_MAX_CONN_IDLE_TIME: "30m"
+      # 不设则 PG 不可达时靠 OS TCP 重传兜底（约 2 分钟），请求会长时间挂住
+      DB_CONNECT_TIMEOUT: "5s"
+      # 工作流读缓存 TTL。进程内缓存，多副本间不互相失效，TTL 即跨副本一致性上界。
+      WORKFLOW_CACHE_TTL: "30s"
+      REDIS_ADDR: redis:6379
+      # JWT 签名密钥：**必填，没有默认值**。
+      # APP_ENV=prod 下服务端的启动校验会拒绝空值、公开占位值（change-me 系列、
+      # secret、password…）与长度 < 32 字节的密钥，并直接退出（退出码 1）。
+      # 这里用 compose 的 :? 语法让它更早失败——在 `docker compose up` 时就报错，
+      # 而不是让容器反复重启。生成：openssl rand -hex 32
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须显式设置：export JWT_SECRET=$(openssl rand -hex 32)}
+      JWT_EXPIRE_HOURS: "72"
+      WORKER_COUNT: "20"
+      QUEUE_NAME: workflow_tasks
+      USE_REDIS_QUEUE: "true"
+      # 队列容量水位（护栏，不是队列大小旋钮）：MAXLEN 在 XADD 时裁掉**尚未投递的
+      # 最老条目**，会静默丢任务，所以必须 >= 可接受的最大积压。
+      # 日常回收由调度器每 10 秒回收「已确认前缀」完成，不依赖 MAXLEN。
+      # 告警规则：nebulaflow_queue_stream_len / nebulaflow_queue_max_len >= 0.9
+      QUEUE_MAXLEN: "10000"
+      QUEUE_DLQ_MAXLEN: "1000"
+      # 提交侧背压：水位达到 MAXLEN × 0.8 时返回 503 + Retry-After，而不是静默裁掉。
+      # 准入线（0.8）刻意低于告警线（0.9）：告警的语义是「第一道防线失效了」。
+      # 负值 = 关闭准入（仅压测对照用，生产禁止）。
+      # 告警规则：rate(nebulaflow_queue_rejected_total[5m]) > 0 ⇒ 系统正在过载
+      QUEUE_ADMIT_RATIO: "0.8"
+      # embedding 维度：决定 document_chunks.embedding_v 的 vector(N) 与 HNSW 索引。
+      # 必须与实际 Embedder 一致，换模型后需清空 document_chunks 重新索引。
+      EMBED_DIM: "384"
+      TASK_TIMEOUT_SEC: "300"
+      DEFAULT_MAX_RETRY: "2"
+      RATE_LIMIT_PER_MIN: "60"
+      # 通配符：非 dev 环境下启动时会打一条 WARN（不是致命项）。
+      # 为什么不致命：认证走 Authorization 头而不是 Cookie，浏览器不会自动携带
+      # 凭据，所以 `*` 不构成 CSRF 式的凭据暴露，实际代价是攻击面变大。
+      # 生产请收紧为前端实际域名。
+      CORS_ORIGINS: "*"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:

@@ -1,0 +1,44 @@
+{
+  "label": "P0-4 G1b-pool4-nocache",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 1,
+  "started_at": "2026-09-20T16:14:35+08:00",
+  "submit": {
+    "requests": 4000,
+    "ok": 4000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 1.39,
+    "rps": 2877,
+    "status_codes": {
+      "201": 4000
+    },
+    "latency": {
+      "min_ms": 6.59,
+      "mean_ms": 17.23,
+      "p50_ms": 8.87,
+      "p90_ms": 42.31,
+      "p95_ms": 62.87,
+      "p99_ms": 110.88,
+      "max_ms": 148.3
+    }
+  },
+  "drain": {
+    "seconds": 15.316,
+    "succeeded": 4000,
+    "failed": 0,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 261.2,
+    "end_to_end_latency": {
+      "min_ms": 1543.01,
+      "mean_ms": 8292.12,
+      "p50_ms": 8198.86,
+      "p90_ms": 13908.59,
+      "p95_ms": 14588.3,
+      "p99_ms": 15169.41,
+      "max_ms": 15296.39
+    }
+  }
+}

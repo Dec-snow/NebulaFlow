@@ -1,0 +1,48 @@
+{
+  "label": "P0-5 F2-on",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 26,
+  "started_at": "2026-09-20T15:05:15+08:00",
+  "submit": {
+    "requests": 20000,
+    "ok": 7954,
+    "failed": 12046,
+    "success_rate": 39.77,
+    "wall_seconds": 1.357,
+    "rps": 14739.9,
+    "status_codes": {
+      "201": 7954,
+      "503": 12046
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 2.61,
+      "p50_ms": 2.33,
+      "p90_ms": 4.52,
+      "p95_ms": 5.3,
+      "p99_ms": 7.31,
+      "max_ms": 17.98
+    },
+    "errors": {
+      "HTTP 503: {\"error\":\"task queue is at capacity, retry later\"}": 12046
+    }
+  },
+  "drain": {
+    "seconds": 16.494,
+    "succeeded": 8004,
+    "failed": 1,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 485.3,
+    "end_to_end_latency": {
+      "min_ms": 0.69,
+      "mean_ms": 8358.67,
+      "p50_ms": 8347.5,
+      "p90_ms": 15061.29,
+      "p95_ms": 15901.9,
+      "p99_ms": 16559.8,
+      "max_ms": 16730.07
+    }
+  }
+}

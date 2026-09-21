@@ -1,0 +1,45 @@
+{
+  "label": "P0-2-B-maxlen1000",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 26,
+  "started_at": "2026-09-20T14:23:37+08:00",
+  "submit": {
+    "requests": 20000,
+    "ok": 20000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 1.12,
+    "rps": 17861.1,
+    "status_codes": {
+      "201": 20000
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 1.97,
+      "p50_ms": 1.78,
+      "p90_ms": 3.34,
+      "p95_ms": 3.88,
+      "p99_ms": 5.06,
+      "max_ms": 8.68
+    }
+  },
+  "drain": {
+    "seconds": 120.848,
+    "succeeded": 1542,
+    "failed": 0,
+    "pending": 18658,
+    "completion_rate": 7.63,
+    "task_throughput_per_sec": 12.8,
+    "end_to_end_latency": {
+      "min_ms": 41.6,
+      "mean_ms": 934.45,
+      "p50_ms": 701.61,
+      "p90_ms": 2265.54,
+      "p95_ms": 2473.34,
+      "p99_ms": 2638.95,
+      "max_ms": 2684.48
+    },
+    "note": "等待超时，仍有 18658 个任务未进入终态"
+  }
+}

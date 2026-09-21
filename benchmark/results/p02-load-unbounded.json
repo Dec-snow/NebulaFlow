@@ -1,0 +1,44 @@
+{
+  "label": "P0-2-A-unbounded",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 26,
+  "started_at": "2026-09-20T14:21:31+08:00",
+  "submit": {
+    "requests": 20000,
+    "ok": 20000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 1.103,
+    "rps": 18137.3,
+    "status_codes": {
+      "201": 20000
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 2.07,
+      "p50_ms": 1.88,
+      "p90_ms": 3.38,
+      "p95_ms": 3.91,
+      "p99_ms": 5.55,
+      "max_ms": 18.93
+    }
+  },
+  "drain": {
+    "seconds": 52.973,
+    "succeeded": 20200,
+    "failed": 0,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 381.3,
+    "end_to_end_latency": {
+      "min_ms": 41.99,
+      "mean_ms": 25186.17,
+      "p50_ms": 25266.09,
+      "p90_ms": 45295.03,
+      "p95_ms": 47784.4,
+      "p99_ms": 49774.48,
+      "max_ms": 50232.8
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Prometheus 抓取配置
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: nebulaflow
+    static_configs:
+      - targets: ["app:8080"]
+    metrics_path: /metrics

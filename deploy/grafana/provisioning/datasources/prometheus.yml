@@ -1,0 +1,10 @@
+# Grafana Provisioning：自动注册 Prometheus 数据源与 NebulaFlow 面板
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

@@ -1,0 +1,44 @@
+{
+  "label": "P0-2-D-reclaim",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 26,
+  "started_at": "2026-09-20T14:37:21+08:00",
+  "submit": {
+    "requests": 20000,
+    "ok": 20000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 0.876,
+    "rps": 22828,
+    "status_codes": {
+      "201": 20000
+    },
+    "latency": {
+      "min_ms": 0,
+      "mean_ms": 2,
+      "p50_ms": 1.77,
+      "p90_ms": 3.15,
+      "p95_ms": 3.7,
+      "p99_ms": 5.48,
+      "max_ms": 37.49
+    }
+  },
+  "drain": {
+    "seconds": 52.556,
+    "succeeded": 20200,
+    "failed": 0,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 384.4,
+    "end_to_end_latency": {
+      "min_ms": 40.86,
+      "mean_ms": 25190.05,
+      "p50_ms": 25260.2,
+      "p90_ms": 45310.3,
+      "p95_ms": 47845.28,
+      "p99_ms": 49799.71,
+      "max_ms": 50280.61
+    }
+  }
+}

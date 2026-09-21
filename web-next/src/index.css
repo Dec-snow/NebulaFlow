@@ -1,0 +1,447 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   NebulaFlow Design System
+   ----------------------------------------------------------------------------
+   设计原则：
+   1. 语义化 token —— 组件只引用 bg / surface / fg / brand 等语义名，
+      不直接写死颜色。因此双主题切换只需换一组变量，组件零改动。
+   2. 层次靠"边框 + 极浅阴影"而非重投影 —— 视觉更轻、更现代。
+   3. 圆角偏大（10–18px）、留白充足 —— 避免密集拥挤的"老气"观感。
+   4. 主色用紫罗兰而非企业蓝 —— 更清新、更少撞色。
+   ========================================================================= */
+
+/* ---------------------------------------------------------------- 浅色主题 */
+:root {
+  color-scheme: light;
+
+  /* 背景层次：页面底 → 卡片 → 内嵌块 → 更深内嵌 */
+  --c-bg: 250 250 252;
+  --c-surface: 255 255 255;
+  --c-surface-2: 246 246 250;
+  --c-surface-3: 240 240 246;
+
+  /* 描边 */
+  --c-line: 233 233 240;
+  --c-line-strong: 214 214 226;
+
+  /* 前景三级 */
+  --c-fg: 18 18 27;
+  --c-fg-muted: 100 100 119;
+  --c-fg-subtle: 149 149 165;
+
+  /* 主色（紫罗兰） */
+  --c-brand: 108 71 255;
+  --c-brand-fg: 255 255 255;
+  --c-brand-soft: 243 240 255;
+  --c-brand-ring: 108 71 255;
+
+  /* 数据/状态辅助色 */
+  --c-mint: 13 168 118;
+  --c-sky: 12 152 220;
+  --c-amber: 209 118 6;
+  --c-rose: 219 39 76;
+  --c-violet: 133 86 242;
+
+  /* 阴影：浅色下用带色温的极低透明度，比纯黑更干净 */
+  --sh-xs: 0 1px 2px rgb(20 20 45 / 0.04);
+  --sh-sm: 0 1px 3px rgb(20 20 45 / 0.05), 0 1px 2px rgb(20 20 45 / 0.03);
+  --sh-md: 0 4px 14px rgb(20 20 45 / 0.07), 0 1px 3px rgb(20 20 45 / 0.04);
+  --sh-lg: 0 16px 40px rgb(20 20 45 / 0.1), 0 4px 12px rgb(20 20 45 / 0.05);
+  --sh-glow: 0 0 0 1px rgb(108 71 255 / 0.16), 0 6px 20px rgb(108 71 255 / 0.2);
+
+  /* 环境光（页面背景的极淡色晕） */
+  --ambient-1: 108 71 255;
+  --ambient-2: 12 152 220;
+  --ambient-strength: 0.05;
+}
+
+/* ---------------------------------------------------------------- 深色主题 */
+.dark {
+  color-scheme: dark;
+
+  --c-bg: 9 9 13;
+  --c-surface: 17 17 23;
+  --c-surface-2: 23 23 31;
+  --c-surface-3: 30 30 40;
+
+  --c-line: 33 33 44;
+  --c-line-strong: 50 50 64;
+
+  --c-fg: 240 240 246;
+  --c-fg-muted: 150 150 167;
+  --c-fg-subtle: 104 104 123;
+
+  --c-brand: 141 113 255;
+  --c-brand-fg: 255 255 255;
+  --c-brand-soft: 32 25 55;
+  --c-brand-ring: 141 113 255;
+
+  --c-mint: 52 211 153;
+  --c-sky: 56 189 248;
+  --c-amber: 251 191 36;
+  --c-rose: 251 113 133;
+  --c-violet: 167 139 250;
+
+  --sh-xs: 0 1px 2px rgb(0 0 0 / 0.5);
+  --sh-sm: 0 1px 3px rgb(0 0 0 / 0.55);
+  --sh-md: 0 4px 14px rgb(0 0 0 / 0.55);
+  --sh-lg: 0 16px 40px rgb(0 0 0 / 0.65);
+  --sh-glow: 0 0 0 1px rgb(141 113 255 / 0.28), 0 6px 24px rgb(141 113 255 / 0.26);
+
+  --ambient-strength: 0.09;
+}
+
+/* -------------------------------------------------------------------- 基础 */
+@layer base {
+  * {
+    @apply border-line;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+    font-variation-settings: "opsz" 32;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* 主题切换时给底色一个柔和过渡（避免生硬跳变） */
+  body,
+  .theme-transition * {
+    transition: background-color 0.25s cubic-bezier(0.32, 0.72, 0, 1),
+      border-color 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-fg font-semibold;
+    letter-spacing: -0.015em;
+  }
+
+  ::selection {
+    background: rgb(var(--c-brand) / 0.22);
+  }
+
+  /* 焦点环：统一用品牌色，且不与元素自身阴影冲突 */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-brand-ring) / 0.55);
+    outline-offset: 2px;
+  }
+
+  /* 细滚动条 */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full border-[3px] border-solid border-transparent bg-clip-content;
+    background-color: rgb(var(--c-line-strong) / 0.7);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--c-fg-subtle) / 0.55);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* ---------------------------------------------------------------- 组件层 */
+@layer components {
+  /* ---------- 按钮 ---------- */
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap
+      rounded-lg px-3.5 py-2 text-sm font-medium
+      transition-all duration-150 ease-smooth
+      disabled:pointer-events-none disabled:opacity-45;
+  }
+  .btn-brand {
+    @apply btn bg-brand text-brand-fg shadow-xs hover:brightness-110 active:brightness-95;
+  }
+  .btn-soft {
+    @apply btn bg-brand-soft text-brand hover:bg-brand-soft/70;
+  }
+  .btn-outline {
+    @apply btn border border-line bg-surface text-fg shadow-xs
+      hover:border-line-strong hover:bg-surface-2;
+  }
+  .btn-ghost {
+    @apply btn text-fg-muted hover:bg-surface-2 hover:text-fg;
+  }
+  .btn-danger {
+    @apply btn bg-rose/10 text-rose hover:bg-rose/15;
+  }
+  .btn-sm {
+    @apply gap-1.5 rounded-md px-2.5 py-1.5 text-xs;
+  }
+  .btn-icon {
+    @apply btn h-9 w-9 p-0;
+  }
+
+  /* ---------- 卡片 ---------- */
+  .card {
+    @apply rounded-xl border border-line bg-surface shadow-xs;
+  }
+  .card-hover {
+    @apply card transition-all duration-200 ease-smooth
+      hover:-translate-y-0.5 hover:border-line-strong hover:shadow-md;
+  }
+  .card-pad {
+    @apply p-5;
+  }
+
+  /* 玻璃拟态：顶栏 / 浮层用，配合 backdrop-blur 产生通透感 */
+  .glass {
+    background: rgb(var(--c-surface) / 0.72);
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+  }
+
+  /* ---------- 表单 ---------- */
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg
+      shadow-xs transition-colors duration-150
+      placeholder:text-fg-subtle
+      hover:border-line-strong
+      focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/12;
+  }
+  .textarea {
+    @apply input resize-y leading-relaxed;
+  }
+  .select {
+    @apply input cursor-pointer appearance-none bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239595a5' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.7rem center;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium text-fg-muted;
+  }
+  .hint {
+    @apply mt-1.5 text-2xs text-fg-subtle;
+  }
+
+  /* ---------- 徽章 / 标签 ---------- */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-transparent
+      px-2 py-0.5 text-2xs font-medium leading-5;
+  }
+  .badge-mint {
+    @apply badge bg-mint/12 text-mint;
+  }
+  .badge-sky {
+    @apply badge bg-sky/12 text-sky;
+  }
+  .badge-amber {
+    @apply badge bg-amber/14 text-amber;
+  }
+  .badge-rose {
+    @apply badge bg-rose/12 text-rose;
+  }
+  .badge-violet {
+    @apply badge bg-violet/12 text-violet;
+  }
+  .badge-neutral {
+    @apply badge border-line bg-surface-2 text-fg-muted;
+  }
+
+  /* 状态圆点：带柔和外发光，比纯色点更"活" */
+  .dot {
+    @apply inline-block h-1.5 w-1.5 shrink-0 rounded-full;
+  }
+  .dot-mint {
+    @apply dot bg-mint;
+    box-shadow: 0 0 0 3px rgb(var(--c-mint) / 0.16);
+  }
+  .dot-amber {
+    @apply dot bg-amber;
+    box-shadow: 0 0 0 3px rgb(var(--c-amber) / 0.16);
+  }
+  .dot-rose {
+    @apply dot bg-rose;
+    box-shadow: 0 0 0 3px rgb(var(--c-rose) / 0.16);
+  }
+  .dot-sky {
+    @apply dot bg-sky;
+    box-shadow: 0 0 0 3px rgb(var(--c-sky) / 0.16);
+  }
+  .dot-subtle {
+    @apply dot bg-fg-subtle;
+  }
+
+  /* ---------- 表格 ---------- */
+  .table-wrap {
+    @apply overflow-hidden rounded-xl border border-line bg-surface;
+  }
+  .table {
+    @apply w-full border-collapse text-sm;
+  }
+  .table thead th {
+    @apply border-b border-line bg-surface-2 px-4 py-2.5 text-left
+      text-2xs font-semibold uppercase tracking-wider text-fg-subtle;
+  }
+  .table tbody td {
+    @apply border-b border-line/70 px-4 py-3 text-fg-muted;
+  }
+  .table tbody tr {
+    @apply transition-colors duration-100;
+  }
+  .table tbody tr:hover {
+    @apply bg-surface-2;
+  }
+  .table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+
+  /* ---------- 骨架屏 ---------- */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-surface-2;
+  }
+  .skeleton::after {
+    @apply absolute inset-0 animate-shimmer;
+    content: "";
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--c-line-strong) / 0.35),
+      transparent
+    );
+  }
+
+  /* ---------- 分隔线 ---------- */
+  .divider {
+    @apply h-px w-full bg-line;
+  }
+
+  /* ---------- 键帽 ---------- */
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-line
+      bg-surface-2 px-1.5 font-mono text-2xs text-fg-muted shadow-xs;
+  }
+}
+
+/* ---------------------------------------------------------------- 工具类 */
+@layer utilities {
+  /* 表格 / KPI 数字用等宽数字，避免位数变化时抖动 */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 页面环境光：极淡的双色晕，给"清新"感定调，不抢内容 */
+  .app-ambient {
+    position: relative;
+  }
+  .app-ambient::before {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    content: "";
+    background:
+      radial-gradient(
+        60rem 40rem at 12% -8%,
+        rgb(var(--ambient-1) / var(--ambient-strength)),
+        transparent 60%
+      ),
+      radial-gradient(
+        50rem 36rem at 92% 4%,
+        rgb(var(--ambient-2) / var(--ambient-strength)),
+        transparent 62%
+      );
+  }
+
+  /* 细网格：仅用于画布类容器 */
+  .dot-grid {
+    background-image: radial-gradient(rgb(var(--c-line-strong) / 0.55) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 文字渐变（仅用于品牌字标，克制使用） */
+  .text-gradient {
+    background: linear-gradient(
+      100deg,
+      rgb(var(--c-brand)),
+      rgb(var(--c-violet)),
+      rgb(var(--c-sky))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+/* ------------------------------------------------ React Flow 主题适配 */
+/* 注意：React Flow 的 style.css 由 WorkflowEditor.tsx 以 JS 方式 import，
+   注入时机晚于本文件。所以这里统一加 `.react-flow` 前缀，把特异性提到 (0,2,0)，
+   保证无论注入顺序如何都能覆盖官方默认值（否则手柄尺寸、连线颜色会被打回原样）。 */
+.react-flow .react-flow__controls {
+  @apply overflow-hidden rounded-lg border border-line shadow-sm;
+}
+.react-flow .react-flow__controls-button {
+  @apply border-line bg-surface text-fg-muted hover:bg-surface-2 hover:text-fg;
+}
+.react-flow .react-flow__controls-button svg {
+  @apply fill-current;
+}
+.react-flow .react-flow__minimap {
+  @apply overflow-hidden rounded-lg border border-line bg-surface;
+}
+.react-flow .react-flow__minimap-mask {
+  fill: rgb(var(--c-fg) / 0.06);
+}
+/* 连接点：默认 6px 太小，放大到 10px 并加 surface 描边，
+   让它看起来像"嵌在卡片上"而不是浮在外面。
+   不用 transform 做 hover 缩放——React Flow 靠 transform 定位手柄，会被覆盖。 */
+.react-flow .react-flow__handle {
+  @apply h-2.5 w-2.5 border-2 border-surface bg-brand;
+}
+.react-flow .react-flow__handle:hover {
+  box-shadow: 0 0 0 4px rgb(var(--c-brand) / 0.18);
+}
+.react-flow .react-flow__edge-path {
+  stroke: rgb(var(--c-brand) / 0.55);
+  stroke-width: 1.75;
+}
+.react-flow .react-flow__edge.selected .react-flow__edge-path,
+.react-flow .react-flow__edge:hover .react-flow__edge-path {
+  stroke: rgb(var(--c-brand));
+  stroke-width: 2.25;
+}
+/* 拖拽连线时的预览线 */
+.react-flow .react-flow__connection-path {
+  stroke: rgb(var(--c-brand));
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+.react-flow .react-flow__node {
+  @apply text-fg;
+}
+.react-flow .react-flow__node:focus,
+.react-flow .react-flow__node:focus-visible {
+  outline: none;
+}
+.react-flow .react-flow__attribution {
+  @apply hidden;
+}
+/* 画布点阵取色：SVG attribute 不解析 var()，所以组件传 color="currentColor"，
+   再由这里的 color 提供真实值，这样主题切换能自动跟随。
+   用 fg-subtle 加透明度而不是 line-strong —— 后者太浅，点阵几乎看不见。 */
+.react-flow .react-flow__background {
+  color: rgb(var(--c-fg-subtle) / 0.55);
+}

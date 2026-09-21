@@ -1,0 +1,44 @@
+{
+  "label": "P0-4 G5-pool8-cache30",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 1,
+  "started_at": "2026-09-20T17:43:45+08:00",
+  "submit": {
+    "requests": 4000,
+    "ok": 4000,
+    "failed": 0,
+    "success_rate": 100,
+    "wall_seconds": 1.887,
+    "rps": 2120.2,
+    "status_codes": {
+      "201": 4000
+    },
+    "latency": {
+      "min_ms": 1.06,
+      "mean_ms": 23.5,
+      "p50_ms": 5.36,
+      "p90_ms": 73.32,
+      "p95_ms": 100.88,
+      "p99_ms": 421.84,
+      "max_ms": 723.21
+    }
+  },
+  "drain": {
+    "seconds": 12.259,
+    "succeeded": 4000,
+    "failed": 0,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 326.3,
+    "end_to_end_latency": {
+      "min_ms": 1606.92,
+      "mean_ms": 6825.37,
+      "p50_ms": 6822.01,
+      "p90_ms": 10961.74,
+      "p95_ms": 11479.44,
+      "p99_ms": 11971.48,
+      "max_ms": 12095.33
+    }
+  }
+}

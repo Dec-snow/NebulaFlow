@@ -1,0 +1,5 @@
+      1 time=2026-09-20T17:42:10.774+08:00 level=ERROR msg="update task node failed" task_id=72461 node=analyst status=succeeded error="ERROR: could not open file \"base/15109/6104\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:42:10.136+08:00 level=ERROR msg="update task node failed" task_id=72477 node=rag status=succeeded error="ERROR: could not open file \"base/15109/32774\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:42:09.560+08:00 level=INFO msg="task finished" task_id=72468 status=failed error="rag node: ERROR: could not open file \"base/15109/41322\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:42:09.029+08:00 level=WARN msg="worker node failed" task_id=72468 node=rag error="rag node: ERROR: could not open file \"base/15109/41322\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:41:51.580+08:00 level=INFO msg="postgres pool configured" max_conns=8 min_conns=5 max_conn_lifetime=1h0m0s max_conn_idle_time=30m0s connect_timeout=5s worker_count=20

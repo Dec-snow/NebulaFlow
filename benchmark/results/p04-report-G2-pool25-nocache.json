@@ -1,0 +1,50 @@
+{
+  "label": "P0-4 G2-pool25-nocache",
+  "worker_count": 0,
+  "concurrency": 50,
+  "workflow_id": 1,
+  "started_at": "2026-09-20T17:28:58+08:00",
+  "submit": {
+    "requests": 4000,
+    "ok": 3996,
+    "failed": 4,
+    "success_rate": 99.9,
+    "wall_seconds": 7.368,
+    "rps": 542.9,
+    "status_codes": {
+      "201": 3996,
+      "500": 4
+    },
+    "latency": {
+      "min_ms": 1.06,
+      "mean_ms": 91.88,
+      "p50_ms": 10.53,
+      "p90_ms": 277.97,
+      "p95_ms": 311.18,
+      "p99_ms": 648.91,
+      "max_ms": 4185.14
+    },
+    "errors": {
+      "HTTP 500: {\"error\":\"ERROR: could not access status of transaction 0 (SQLSTATE 42501)\"}": 2,
+      "HTTP 500: {\"error\":\"ERROR: could not open file \\\"base/15109/24595\\\": Permission denied (SQLSTATE 42501)\"}": 1,
+      "HTTP 500: {\"error\":\"ERROR: could not open file \\\"base/15109/24600\\\": Permission denied (SQLSTATE 42501)\"}": 1
+    }
+  },
+  "drain": {
+    "seconds": 13.389,
+    "succeeded": 3994,
+    "failed": 2,
+    "pending": 0,
+    "completion_rate": 100,
+    "task_throughput_per_sec": 298.5,
+    "end_to_end_latency": {
+      "min_ms": 5541.32,
+      "mean_ms": 10079.91,
+      "p50_ms": 9685.67,
+      "p90_ms": 12632.08,
+      "p95_ms": 13018.65,
+      "p99_ms": 13297.85,
+      "max_ms": 13353.62
+    }
+  }
+}

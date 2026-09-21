@@ -1,0 +1,73 @@
+@import "@xyflow/react/dist/style.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-nebula-950 text-slate-200 font-mono antialiased;
+}
+
+/* 深色主题下调整 React Flow 控件与背景 */
+.react-flow__controls {
+  @apply shadow-lg rounded-lg overflow-hidden;
+}
+.react-flow__controls-button {
+  @apply bg-nebula-800 border-nebula-700 text-slate-200 hover:bg-nebula-700;
+}
+.react-flow__minimap {
+  @apply rounded-lg overflow-hidden;
+}
+.react-flow__handle {
+  @apply w-3 h-3 !bg-nebula-400 border-2 border-nebula-900;
+}
+.react-flow__edge-path {
+  stroke: #5b7cff;
+  stroke-width: 1.5;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #8aa3ff;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-nebula-700 rounded-full;
+}
+::-webkit-scrollbar-track {
+  @apply bg-nebula-900;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
+      transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-nebula-500 hover:bg-nebula-400 text-white;
+  }
+  .btn-ghost {
+    @apply btn bg-nebula-800 hover:bg-nebula-700 text-slate-200 border border-nebula-700;
+  }
+  .btn-danger {
+    @apply btn bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30;
+  }
+  .input {
+    @apply w-full px-3 py-2 rounded-lg bg-nebula-900 border border-nebula-700
+      text-slate-200 text-sm focus:outline-none focus:border-nebula-400
+      placeholder:text-slate-500;
+  }
+  .card {
+    @apply bg-nebula-900 border border-nebula-800 rounded-xl p-5;
+  }
+  .label {
+    @apply block text-xs text-slate-400 mb-1.5;
+  }
+}

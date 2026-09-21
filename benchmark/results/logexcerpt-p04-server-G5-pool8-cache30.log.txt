@@ -1,0 +1,16 @@
+      1 time=2026-09-20T17:43:58.764+08:00 level=INFO msg="database pool recovered" acquired=0 max=8
+      1 time=2026-09-20T17:43:46.096+08:00 level=INFO msg="task finished" task_id=76561 status=failed error="rag node: ERROR: could not open file \"base/15109/41321\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.453+08:00 level=INFO msg="task finished" task_id=76574 status=failed error="rag node: ERROR: could not open file \"base/15109/41321\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.453+08:00 level=INFO msg="task finished" task_id=76573 status=failed error="rag node: ERROR: could not open file \"base/15109/24737\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.453+08:00 level=INFO msg="task finished" task_id=76572 status=failed error="rag node: ERROR: could not open file \"base/15109/41323\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.453+08:00 level=INFO msg="task finished" task_id=76567 status=failed error="rag node: ERROR: could not open file \"base/15109/24737\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.452+08:00 level=INFO msg="task finished" task_id=76568 status=failed error="rag node: ERROR: could not open file \"base/15109/41321\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.227+08:00 level=WARN msg="worker node failed" task_id=76573 node=rag error="rag node: ERROR: could not open file \"base/15109/24737\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.226+08:00 level=WARN msg="worker node failed" task_id=76572 node=rag error="rag node: ERROR: could not open file \"base/15109/41323\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.226+08:00 level=WARN msg="worker node failed" task_id=76567 node=rag error="rag node: ERROR: could not open file \"base/15109/24737\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.226+08:00 level=WARN msg="worker node failed" task_id=76561 node=rag error="rag node: ERROR: could not open file \"base/15109/41321\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.225+08:00 level=WARN msg="worker node failed" task_id=76574 node=rag error="rag node: ERROR: could not open file \"base/15109/41321\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:45.225+08:00 level=WARN msg="worker node failed" task_id=76568 node=rag error="rag node: ERROR: could not open file \"base/15109/41321\": Permission denied (SQLSTATE 42501)"
+      1 time=2026-09-20T17:43:43.764+08:00 level=WARN msg="database pool saturated" acquired=8 max=8 empty_acquire_total=33 canceled_acquire_total=0 hint="调大 DB_MAX_CONNS（并确认 PG 的 max_connections 留有余量）"
+      1 time=2026-09-20T17:43:28.681+08:00 level=INFO msg="workflow read cache enabled" backend=redis ttl=30s
+      1 time=2026-09-20T17:43:28.425+08:00 level=INFO msg="postgres pool configured" max_conns=8 min_conns=5 max_conn_lifetime=1h0m0s max_conn_idle_time=30m0s connect_timeout=5s worker_count=20

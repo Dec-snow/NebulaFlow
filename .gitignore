@@ -1,0 +1,34 @@
+# 构建产物
+/bin/
+/seed.exe
+/server.exe
+/server-mem.exe
+*.exe
+
+# 本地压测基础设施（PostgreSQL 数据目录、日志、临时 token）
+/.bench/
+
+# 环境变量
+.env
+.env.local
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# AI 辅助工具临时文件
+/.workbuddy/
+/.workbuddy-ai/
+
+# 日志
+*.log
+
+# Node.js 依赖
+node_modules/
+
+# 前端构建产物
+web-next/dist/
+web-next/.output/
+web-next/.nuxt/
+web/dist/
