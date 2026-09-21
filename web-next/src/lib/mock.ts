@@ -116,7 +116,7 @@ export const ACTIVITY: ActivityItem[] = [
   { id: "a5", at: ago(3.8), kind: "error", text: "任务 #1279 失败", meta: "tool 参数校验不通过" },
   { id: "a6", at: ago(5.2), kind: "node", text: "analyst 节点完成", meta: "1.4s · 890 tok" },
   { id: "a7", at: ago(7.6), kind: "task", text: "任务 #1278 执行成功", meta: "知识库问答流" },
-  { id: "a8", at: ago(9.4), kind: "system", text: "Provider 故障转移", meta: "deepseek → ollama" },
+  { id: "a8", at: ago(9.4), kind: "system", text: "Provider 故障转移", meta: "deepseek → openai" },
 ];
 
 /* ------------------------------------------------------------------ 工作流 */
