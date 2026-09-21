@@ -2,17 +2,20 @@ import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   Activity,
+  BarChart3,
   Boxes,
   ChevronsLeft,
   ChevronsRight,
   Database,
   GitBranch,
+  Globe,
   LayoutDashboard,
   LogOut,
   type LucideIcon,
 } from "lucide-react";
 import { Avatar } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useI18n, type Locale } from "@/i18n";
 import { BrandMark } from "./Brand";
 
 interface NavItem {
@@ -30,28 +33,6 @@ interface NavGroup {
   items: NavItem[];
 }
 
-const GROUPS: NavGroup[] = [
-  {
-    title: "总览",
-    items: [{ to: "/", label: "控制台", icon: LayoutDashboard, end: true }],
-  },
-  {
-    title: "编排",
-    items: [
-      { to: "/workflows", label: "工作流", icon: GitBranch },
-      { to: "/tasks", label: "任务", icon: Activity, badge: 2, badgeTone: "sky" },
-    ],
-  },
-  {
-    title: "数据",
-    items: [{ to: "/knowledge", label: "知识库", icon: Database }],
-  },
-  {
-    title: "配置",
-    items: [{ to: "/models", label: "模型与供应商", icon: Boxes }],
-  },
-];
-
 const BADGE_TONE: Record<string, string> = {
   brand: "bg-brand-soft text-brand",
   mint: "bg-mint/12 text-mint",
@@ -60,6 +41,43 @@ const BADGE_TONE: Record<string, string> = {
 
 const COLLAPSE_KEY = "nf-sidebar-collapsed";
 
+const LANGS: { locale: Locale; label: string; short: string }[] = [
+  { locale: "zh-CN", label: "简体中文", short: "中" },
+  { locale: "en-US", label: "English", short: "EN" },
+];
+
+/**
+ * 根据 i18n 字典生成导航组配置。
+ * 图标与路径是结构化数据，label / title 走翻译。
+ */
+function buildNavGroups(t: (key: string) => string): NavGroup[] {
+  return [
+    {
+      title: t("nav.overview"),
+      items: [{ to: "/", label: t("nav.dashboard"), icon: LayoutDashboard, end: true }],
+    },
+    {
+      title: t("nav.orchestration"),
+      items: [
+        { to: "/workflows", label: t("nav.workflows"), icon: GitBranch },
+        { to: "/tasks", label: t("nav.tasks"), icon: Activity, badge: 2, badgeTone: "sky" },
+      ],
+    },
+    {
+      title: t("nav.data"),
+      items: [{ to: "/knowledge", label: t("nav.knowledge"), icon: Database }],
+    },
+    {
+      title: t("nav.settings"),
+      items: [{ to: "/models", label: t("nav.models"), icon: Boxes }],
+    },
+    {
+      title: t("nav.analytics"),
+      items: [{ to: "/cost", label: t("nav.cost"), icon: BarChart3 }],
+    },
+  ];
+}
+
 export function Sidebar({
   username,
   onLogout,
@@ -67,6 +85,8 @@ export function Sidebar({
   username: string;
   onLogout: () => void;
 }) {
+  const { locale, setLocale, t } = useI18n();
+  const groups = buildNavGroups(t);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(COLLAPSE_KEY) === "1";
@@ -113,7 +133,7 @@ export function Sidebar({
 
       {/* 导航 */}
       <nav className="scrollbar-none flex-1 overflow-y-auto px-3 py-4">
-        {GROUPS.map((group, gi) => (
+        {groups.map((group, gi) => (
           <div key={group.title} className={cn(gi > 0 && "mt-5")}>
             {!collapsed && (
               <div className="mb-2 px-2 text-2xs font-semibold uppercase tracking-widest text-fg-subtle">
@@ -134,15 +154,15 @@ export function Sidebar({
         <div className="mx-3 mb-3 rounded-lg border border-line bg-surface-2/60 px-3 py-2.5">
           <div className="flex items-center gap-2">
             <span className="dot dot-mint" />
-            <span className="text-2xs font-medium text-fg">所有系统正常</span>
+            <span className="text-2xs font-medium text-fg">{t("sidebar.allSystemsNormal")}</span>
           </div>
           <p className="mt-1 text-2xs leading-relaxed text-fg-subtle">
-            工作流引擎 · DAG 调度 · 模型路由
+            {t("sidebar.engine")}
           </p>
         </div>
       )}
 
-      {/* 用户 + 折叠开关 */}
+      {/* 用户 + 语言切换 + 折叠开关 */}
       <div className="border-t border-line p-3">
         <div className={cn("flex items-center gap-2.5", collapsed && "justify-center")}>
           <Avatar name={username} size={30} />
@@ -154,8 +174,8 @@ export function Sidebar({
               </div>
               <button
                 onClick={onLogout}
-                title="退出登录"
-                aria-label="退出登录"
+                title={t("sidebar.logout")}
+                aria-label={t("sidebar.logout")}
                 className="rounded-md p-1.5 text-fg-subtle transition-colors hover:bg-rose/10 hover:text-rose"
               >
                 <LogOut size={15} />
@@ -163,6 +183,41 @@ export function Sidebar({
             </>
           )}
         </div>
+
+        {/* 语言切换 */}
+        {!collapsed && (
+          <div className="mt-3 flex items-center gap-1 rounded-lg border border-line bg-surface-2/60 p-1">
+            {LANGS.map((lang) => (
+              <button
+                key={lang.locale}
+                onClick={() => setLocale(lang.locale)}
+                title={lang.label}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-2xs font-medium transition-colors",
+                  locale === lang.locale
+                    ? "bg-brand text-white shadow-sm"
+                    : "text-fg-subtle hover:bg-surface hover:text-fg",
+                )}
+              >
+                <Globe size={12} />
+                {lang.short}
+              </button>
+            ))}
+          </div>
+        )}
+        {collapsed && (
+          <button
+            onClick={() => {
+              const idx = LANGS.findIndex((l) => l.locale === locale);
+              const next = LANGS[(idx + 1) % LANGS.length];
+              setLocale(next.locale);
+            }}
+            title="切换语言 / Toggle language"
+            className="mt-3 flex w-full items-center justify-center rounded-md p-1.5 text-fg-subtle transition-colors hover:bg-surface-2 hover:text-fg"
+          >
+            <Globe size={15} />
+          </button>
+        )}
 
         <button
           onClick={() => setCollapsed((c) => !c)}

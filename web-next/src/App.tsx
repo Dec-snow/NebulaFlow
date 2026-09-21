@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/shell/AppShell";
+import CostAnalysis from "@/pages/CostAnalysis";
 import Dashboard from "@/pages/Dashboard";
 import Knowledge from "@/pages/Knowledge";
 import Login from "@/pages/Login";
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="tasks/:id" element={<TaskDetail />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="models" element={<Models />} />
+        <Route path="cost" element={<CostAnalysis />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

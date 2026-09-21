@@ -94,6 +94,65 @@ export const TOKEN_BY_PROVIDER = [
   { label: "Anthropic", value: 148_600, tone: "violet" as const },
 ];
 
+/* --------------------------------------------------------------- 成本分析 */
+
+/** 模型单价（元 / 百万 token） */
+export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "deepseek-v3": { input: 1, output: 2 },
+  "deepseek-r1": { input: 4, output: 16 },
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "gpt-4o": { input: 5, output: 15 },
+  "glm-4-plus": { input: 1, output: 1 },
+  "glm-4-flash": { input: 0.1, output: 0.1 },
+  "claude-3.5-sonnet": { input: 3, output: 15 },
+};
+
+export interface CostByModel {
+  model: string;
+  provider: string;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  calls: number;
+}
+
+export const COST_BY_MODEL: CostByModel[] = [
+  { model: "deepseek-v3", provider: "DeepSeek", tokensIn: 1_200_000, tokensOut: 620_400, cost: 24.41, calls: 1280 },
+  { model: "gpt-4o-mini", provider: "OpenAI", tokensIn: 680_000, tokensOut: 260_200, cost: 2.58, calls: 845 },
+  { model: "glm-4-plus", provider: "智谱 AI", tokensIn: 350_000, tokensOut: 162_800, cost: 0.51, calls: 320 },
+  { model: "deepseek-r1", provider: "DeepSeek", tokensIn: 180_000, tokensOut: 95_000, cost: 2.24, calls: 96 },
+  { model: "claude-3.5-sonnet", provider: "Anthropic", tokensIn: 100_000, tokensOut: 48_600, cost: 1.03, calls: 42 },
+  { model: "gpt-4o", provider: "OpenAI", tokensIn: 60_000, tokensOut: 22_000, cost: 0.63, calls: 28 },
+];
+
+export interface CostByWorkflow {
+  id: number;
+  name: string;
+  cost: number;
+  tasks: number;
+  avgCost: number;
+  trend: number;
+}
+
+export const COST_BY_WORKFLOW: CostByWorkflow[] = [
+  { id: 1, name: "技术分析工作流", cost: 12.8, tasks: 420, avgCost: 0.03, trend: 12.4 },
+  { id: 2, name: "多模型对比评测", cost: 8.5, tasks: 96, avgCost: 0.09, trend: -5.2 },
+  { id: 3, name: "知识库问答", cost: 5.2, tasks: 680, avgCost: 0.008, trend: 2.1 },
+  { id: 4, name: "定时数据巡检", cost: 1.9, tasks: 120, avgCost: 0.016, trend: -10.5 },
+  { id: 5, name: "内容摘要流水线", cost: 1.5, tasks: 340, avgCost: 0.004, trend: 8.7 },
+  { id: 6, name: "代码评审助手", cost: 0.98, tasks: 64, avgCost: 0.015, trend: 15.3 },
+];
+
+/** 每日成本趋势（近 14 天） */
+export const COST_TREND_LABELS = Array.from({ length: 14 }, (_, i) => {
+  const d = new Date();
+  d.setDate(d.getDate() - (13 - i));
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+});
+
+const costRand = seeded(42);
+export const COST_TREND = Array.from({ length: 14 }, () => +(1.5 + costRand() * 2.5).toFixed(2));
+
 /* ------------------------------------------------------------------ 活动流 */
 export type ActivityKind = "task" | "node" | "system" | "error";
 

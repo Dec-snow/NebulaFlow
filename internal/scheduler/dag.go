@@ -47,7 +47,7 @@ var (
 // API 层在保存工作流时调用，避免把无法执行的节点写进库里。
 func ValidateNodeType(t model.NodeType) bool {
 	switch t {
-	case model.NodeInput, model.NodeLLM, model.NodeRAG, model.NodeTool, model.NodeOutput:
+	case model.NodeInput, model.NodeLLM, model.NodeRAG, model.NodeTool, model.NodeCondition, model.NodeOutput:
 		return true
 	default:
 		return false

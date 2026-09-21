@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   Database,
+  GitBranch,
   LayoutGrid,
   LogIn,
   LogOut,
@@ -105,6 +106,14 @@ const NODE_META: Record<NodeKind, NodeMeta> = {
     accent: "bg-amber",
     map: "rgb(245 158 11 / 0.65)",
   },
+  condition: {
+    label: "条件",
+    icon: GitBranch,
+    chip: "bg-rose/12 text-rose",
+    ring: "ring-rose/40",
+    accent: "bg-rose",
+    map: "rgb(244 63 94 / 0.65)",
+  },
   output: {
     label: "输出",
     icon: LogOut,
@@ -119,6 +128,7 @@ const PALETTE: { type: NodeKind; hint: string }[] = [
   { type: "input", hint: "接收用户输入" },
   { type: "llm", hint: "调用大模型生成" },
   { type: "rag", hint: "知识库检索增强" },
+  { type: "condition", hint: "IF / ELSE 分支" },
   { type: "tool", hint: "计算 / HTTP / 时间" },
   { type: "output", hint: "汇总最终结果" },
 ];
@@ -128,6 +138,7 @@ const DEFAULT_CONFIG: Record<NodeKind, EditorNode["config"]> = {
   input: {},
   llm: { model: "deepseek-v3", prompt: "", system: "", maxRetry: 2, timeoutSec: 60 },
   rag: { knowledgeBaseId: 1, prompt: "", maxRetry: 2, timeoutSec: 60 },
+  condition: { expression: "{{input}} != ''" },
   tool: { tool: "time", maxRetry: 2, timeoutSec: 60 },
   output: {},
 };
@@ -144,6 +155,8 @@ function nodeSummary(kind: NodeKind, c: EditorNode["config"]): string {
       return c.knowledgeBaseId ? `知识库 #${c.knowledgeBaseId}` : "未绑定知识库";
     case "tool":
       return c.tool ?? "未选择工具";
+    case "condition":
+      return c.expression ? c.expression.slice(0, 24) + (c.expression.length > 24 ? "…" : "") : "无条件";
     case "input":
       return "用户输入";
     case "output":
@@ -282,8 +295,38 @@ function WorkflowNodeView({ id, data, selected }: NodeProps<WFNode>) {
       </div>
 
       {/* 输出节点没有下游 */}
-      {data.kind !== "output" && (
+      {data.kind !== "output" && data.kind !== "condition" && (
         <Handle type="source" position={Position.Right} isConnectable />
+      )}
+
+      {/* 条件节点：两个输出 handle（true / false） */}
+      {data.kind === "condition" && (
+        <>
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="true"
+            isConnectable
+            style={{ top: "32%" }}
+          />
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="false"
+            isConnectable
+            style={{ top: "68%" }}
+          />
+          <span
+            className="pointer-events-none absolute right-3 top-[24%] text-[10px] font-medium text-mint"
+          >
+            T
+          </span>
+          <span
+            className="pointer-events-none absolute right-3 top-[60%] text-[10px] font-medium text-rose"
+          >
+            F
+          </span>
+        </>
       )}
     </div>
   );
@@ -517,6 +560,34 @@ function EditorInner() {
           : n,
       ),
     );
+  };
+
+  /* ---------- 上游节点变量 ---------- */
+  const upstreamNodes = useMemo(() => {
+    if (!selectedId) return [];
+    const upstream: string[] = [];
+    const visited = new Set<string>();
+    const stack = [selectedId];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const e of edges) {
+        if (e.target === cur && !visited.has(e.source)) {
+          visited.add(e.source);
+          upstream.push(e.source);
+          stack.push(e.source);
+        }
+      }
+    }
+    return upstream
+      .map((id) => nodes.find((n) => n.id === id))
+      .filter((n): n is WFNode => !!n);
+  }, [selectedId, edges, nodes]);
+
+  const insertVar = (nodeId: string, field: "prompt" | "system", variable: string) => {
+    const current = nodes.find((n) => n.id === nodeId);
+    if (!current) return;
+    const val = current.data.config[field] ?? "";
+    patch(nodeId, { [field]: `${val}${val ? " " : ""}{{${variable}}}` });
   };
 
   const removeSelected = () => {
@@ -830,6 +901,36 @@ function EditorInner() {
                       placeholder="支持 {{input}} 引用上游输出"
                     />
                   </Field>
+
+                  <div>
+                    <div className="mb-1.5 text-2xs font-medium text-fg-subtle">
+                      可用变量
+                      <span className="ml-1 text-fg-muted">（点击插入）</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {upstreamNodes.length === 0 ? (
+                        <span className="text-2xs text-fg-muted">暂无上游节点</span>
+                      ) : (
+                        upstreamNodes.map((n) => {
+                          const vars =
+                            n.data.kind === "input"
+                              ? ["input"]
+                              : n.data.kind === "rag"
+                                ? ["output", "context"]
+                                : ["output"];
+                          return vars.map((v) => (
+                            <button
+                              key={`${n.id}-${v}`}
+                              onClick={() => insertVar(current.id, "prompt", `${n.id}.${v}`)}
+                              className="rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-fg-subtle transition-colors hover:border-brand/40 hover:bg-brand/5 hover:text-brand"
+                            >
+                              {`{{${n.id}.${v}}}`}
+                            </button>
+                          ));
+                        })
+                      )}
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -853,6 +954,50 @@ function EditorInner() {
                       onChange={(e) => patch(current.id, { prompt: e.target.value })}
                     />
                   </Field>
+                </>
+              )}
+
+              {current.data.kind === "condition" && (
+                <>
+                  <Field label="条件表达式" hint="支持 {{变量}} 引用，返回 true/false">
+                    <Textarea
+                      rows={3}
+                      value={current.data.config.expression ?? ""}
+                      onChange={(e) => patch(current.id, { expression: e.target.value })}
+                      placeholder="{{input.sentiment}} == 'positive'"
+                    />
+                  </Field>
+                  <div>
+                    <div className="mb-1.5 text-2xs font-medium text-fg-subtle">
+                      可用变量
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {upstreamNodes.length === 0 ? (
+                        <span className="text-2xs text-fg-muted">暂无上游节点</span>
+                      ) : (
+                        upstreamNodes.map((n) => (
+                          <button
+                            key={n.id}
+                            onClick={() =>
+                              patch(current.id, {
+                                expression: `${current.data.config.expression ?? ""}{{${n.id}.output}}`,
+                              })
+                            }
+                            className="rounded-md border border-line bg-surface px-2 py-1 font-mono text-[11px] text-fg-subtle transition-colors hover:border-brand/40 hover:bg-brand/5 hover:text-brand"
+                          >
+                            {`{{${n.id}.output}}`}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-amber/5 p-3 text-2xs leading-relaxed text-amber">
+                    <strong>分支语义</strong>
+                    <div className="mt-1 space-y-0.5 text-fg-subtle">
+                      <div>· T 端口：表达式为 true 时走该分支</div>
+                      <div>· F 端口：表达式为 false 时走该分支</div>
+                    </div>
+                  </div>
                 </>
               )}
 

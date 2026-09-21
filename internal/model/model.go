@@ -24,11 +24,12 @@ type User struct {
 type NodeType string
 
 const (
-	NodeInput  NodeType = "input"
-	NodeLLM    NodeType = "llm"
-	NodeRAG    NodeType = "rag"
-	NodeTool   NodeType = "tool"
-	NodeOutput NodeType = "output"
+	NodeInput     NodeType = "input"
+	NodeLLM       NodeType = "llm"
+	NodeRAG       NodeType = "rag"
+	NodeTool      NodeType = "tool"
+	NodeCondition NodeType = "condition"
+	NodeOutput    NodeType = "output"
 )
 
 // TaskStatus 定义任务状态机。

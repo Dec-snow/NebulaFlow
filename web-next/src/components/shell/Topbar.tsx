@@ -10,6 +10,7 @@ const TITLES: Record<string, { title: string; subtitle: string }> = {
   "/tasks": { title: "任务", subtitle: "执行记录与实时日志" },
   "/knowledge": { title: "知识库", subtitle: "文档索引与 RAG 检索" },
   "/models": { title: "模型与供应商", subtitle: "LLM Provider 配置" },
+  "/cost": { title: "成本分析", subtitle: "Token 消耗与费用明细" },
 };
 
 function resolveTitle(pathname: string) {
