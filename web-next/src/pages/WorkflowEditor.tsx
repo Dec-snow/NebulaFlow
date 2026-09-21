@@ -37,6 +37,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
+import { Undo2, Redo2 } from "lucide-react";
 import {
   Badge,
   Button,
@@ -46,7 +47,7 @@ import {
   Select,
   Textarea,
 } from "@/components/ui";
-import { EDITOR_EDGES, EDITOR_NODES, type EditorNode } from "@/lib/mock";
+import { EDITOR_EDGES, EDITOR_NODES, PROMPT_TEMPLATES, type EditorNode } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ 类型 */
@@ -321,6 +322,121 @@ function EditorInner() {
   const [selectedId, setSelectedId] = useState<string | null>("analyst");
   const [warning, setWarning] = useState<string | null>(null);
 
+  /* ---------- 撤销 / 重做历史栈 ---------- */
+  const historyRef = useRef<{ nodes: WFNode[]; edges: Edge[] }[]>([]);
+  const historyIndexRef = useRef(-1);
+  const skipHistoryRef = useRef(false);
+
+  const pushHistory = useCallback((nds: WFNode[], eds: Edge[]) => {
+    if (skipHistoryRef.current) return;
+    const history = historyRef.current;
+    const idx = historyIndexRef.current;
+    // 截断 redo 分支
+    history.length = idx + 1;
+    history.push({ nodes: nds.map((n) => ({ ...n, position: { ...n.position } })), edges: eds.map((e) => ({ ...e })) });
+    historyIndexRef.current = history.length - 1;
+    // 最多保留 50 步
+    if (history.length > 50) {
+      history.shift();
+      historyIndexRef.current = history.length - 1;
+    }
+  }, []);
+
+  // 初始化历史栈
+  useEffect(() => {
+    pushHistory(initialNodes, initialEdges);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const canUndo = historyIndexRef.current > 0;
+  const canRedo = historyIndexRef.current < historyRef.current.length - 1;
+
+  const undo = useCallback(() => {
+    const history = historyRef.current;
+    const idx = historyIndexRef.current;
+    if (idx <= 0) return;
+    const prev = history[idx - 1];
+    historyIndexRef.current = idx - 1;
+    skipHistoryRef.current = true;
+    setNodes(prev.nodes.map((n) => ({ ...n, position: { ...n.position } })));
+    setEdges(prev.edges.map((e) => ({ ...e })));
+    setTimeout(() => { skipHistoryRef.current = false; }, 0);
+  }, [setNodes, setEdges]);
+
+  const redo = useCallback(() => {
+    const history = historyRef.current;
+    const idx = historyIndexRef.current;
+    if (idx >= history.length - 1) return;
+    const next = history[idx + 1];
+    historyIndexRef.current = idx + 1;
+    skipHistoryRef.current = true;
+    setNodes(next.nodes.map((n) => ({ ...n, position: { ...n.position } })));
+    setEdges(next.edges.map((e) => ({ ...e })));
+    setTimeout(() => { skipHistoryRef.current = false; }, 0);
+  }, [setNodes, setEdges]);
+
+  // 节点/边变化时记录历史（防抖：同一帧内的多次变化只记录一次）
+  const historyTimerRef = useRef<number | null>(null);
+  const scheduleHistory = useCallback(() => {
+    if (skipHistoryRef.current) return;
+    if (historyTimerRef.current) window.clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = window.setTimeout(() => {
+      pushHistory(nodes, edges);
+    }, 300);
+  }, [nodes, edges, pushHistory]);
+
+  useEffect(() => {
+    scheduleHistory();
+  }, [nodes, edges, scheduleHistory]);
+
+  /* ---------- 快捷键 ---------- */
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      // 输入框中不触发编辑类快捷键
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+
+      // Backspace / Delete：删除选中节点
+      if ((e.key === "Backspace" || e.key === "Delete") && selectedId) {
+        e.preventDefault();
+        removeSelected();
+        return;
+      }
+
+      // Ctrl/Cmd + Z：撤销
+      if (mod && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      // Ctrl/Cmd + Shift + Z 或 Ctrl/Cmd + Y：重做
+      if (mod && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
+      // Ctrl/Cmd + S：保存
+      if (mod && e.key === "s") {
+        e.preventDefault();
+        handleSave();
+        return;
+      }
+
+      // Ctrl/Cmd + A：全选（不拦截，让 React Flow 自己处理）
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, undo, redo]);
+
   // React Flow 的 NodeTypes 要求 ComponentType<NodeProps>（data 为 Record<string, unknown>），
   // 而本组件是 NodeProps<WFNode>（data 更具体）。函数参数逆变导致二者不兼容，
   // 所以这里断言一次；data 的实际形状由 initialNodes / onDrop 的构造处保证。
@@ -410,6 +526,14 @@ function EditorInner() {
     setSelectedId(null);
   };
 
+  const handleSave = () => {
+    setWarning(null);
+    // 模拟保存
+    window.setTimeout(() => {
+      flashWarning("已保存");
+    }, 100);
+  };
+
   const toggleFullscreen = () => {
     const el = wrapRef.current;
     if (!el) return;
@@ -443,8 +567,26 @@ function EditorInner() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <div className="mr-2 flex items-center gap-1 border-r border-line pr-2">
+            <IconButton
+              label="撤销 (Ctrl+Z)"
+              size="sm"
+              onClick={undo}
+              disabled={!canUndo}
+            >
+              <Undo2 size={14} />
+            </IconButton>
+            <IconButton
+              label="重做 (Ctrl+Shift+Z)"
+              size="sm"
+              onClick={redo}
+              disabled={!canRedo}
+            >
+              <Redo2 size={14} />
+            </IconButton>
+          </div>
           <Badge tone="neutral">已自动保存</Badge>
-          <Button variant="outline" size="sm" icon={<Save size={13} />}>
+          <Button variant="outline" size="sm" icon={<Save size={13} />} onClick={handleSave}>
             保存
           </Button>
           <Button variant="brand" size="sm" icon={<Play size={13} />}>
@@ -641,6 +783,37 @@ function EditorInner() {
                       <option value="claude-3.5-sonnet">claude-3.5-sonnet</option>
                     </Select>
                   </Field>
+
+                  <Field label="Prompt 模板" hint="选择模板快速填充">
+                    <select
+                      className="select w-full"
+                      value=""
+                      onChange={(e) => {
+                        const tpl = PROMPT_TEMPLATES.find((t) => t.id === e.target.value);
+                        if (!tpl) return;
+                        patch(current.id, {
+                          prompt: tpl.prompt,
+                          system: tpl.system ?? "",
+                        });
+                        // 重置 select 显示
+                        e.target.value = "";
+                      }}
+                    >
+                      <option value="" disabled>
+                        选择模板…
+                      </option>
+                      {(["通用", "分析", "写作", "翻译", "代码"] as const).map((cat) => (
+                        <optgroup key={cat} label={cat}>
+                          {PROMPT_TEMPLATES.filter((t) => t.category === cat).map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+
                   <Field label="System 提示词">
                     <Textarea
                       rows={4}

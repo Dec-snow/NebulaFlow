@@ -17,21 +17,16 @@ import {
   Card,
   CardHeader,
   MiniStat,
+  PageLoader,
   RingProgress,
   Segmented,
   Stat,
   StatusBadge,
   StatusDot,
 } from "@/components/ui";
-import {
-  ACTIVITY,
-  KPIS,
-  THROUGHPUT,
-  THROUGHPUT_LABELS,
-  TOKEN_BY_PROVIDER,
-  WORKER_STATS,
-  type ActivityKind,
-} from "@/lib/mock";
+import { api } from "@/api";
+import { useFetch } from "@/hooks";
+import { type ActivityKind } from "@/lib/mock";
 import { clockOf, cn } from "@/lib/utils";
 
 const KIND_ICON: Record<ActivityKind, typeof Zap> = {
@@ -50,6 +45,22 @@ const KIND_TONE: Record<ActivityKind, string> = {
 
 export default function Dashboard() {
   const [range, setRange] = useState<"24h" | "7d" | "30d">("24h");
+  const { data, loading, refresh } = useFetch(
+    () => api.dashboard.get(range),
+    [range],
+  );
+
+  if (loading || !data) return <PageLoader text="加载控制台数据…" />;
+
+  const {
+    kpis,
+    throughput,
+    throughputLabels,
+    workerStats,
+    tokenByProvider,
+    activity,
+    recentTasks,
+  } = data;
 
   return (
     <div className="space-y-7">
@@ -64,14 +75,14 @@ export default function Dashboard() {
         <div className="flex items-center gap-2">
           <Segmented
             value={range}
-            onChange={setRange}
+            onChange={(v) => setRange(v as "24h" | "7d" | "30d")}
             options={[
               { value: "24h", label: "24 小时" },
               { value: "7d", label: "7 天" },
               { value: "30d", label: "30 天" },
             ]}
           />
-          <Button variant="outline" size="sm" icon={<RefreshCw size={13} />}>
+          <Button variant="outline" size="sm" icon={<RefreshCw size={13} />} onClick={refresh}>
             刷新
           </Button>
         </div>
@@ -79,7 +90,7 @@ export default function Dashboard() {
 
       {/* KPI */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {KPIS.map((k) => (
+        {kpis.map((k) => (
           <Stat
             key={k.key}
             label={k.label}
@@ -99,7 +110,7 @@ export default function Dashboard() {
         <Card className="lg:col-span-2">
           <CardHeader
             title="任务吞吐量"
-            subtitle={`按小时统计 · 峰值 ${Math.max(...THROUGHPUT)} 个任务`}
+            subtitle={`按小时统计 · 峰值 ${Math.max(...throughput)} 个任务`}
             action={
               <Badge tone="mint">
                 <StatusDot tone="mint" />
@@ -107,22 +118,22 @@ export default function Dashboard() {
               </Badge>
             }
           />
-          <AreaChart data={THROUGHPUT} labels={THROUGHPUT_LABELS} tone="brand" />
+          <AreaChart data={throughput} labels={throughputLabels} tone="brand" />
         </Card>
 
         <Card>
-          <CardHeader title="Worker 利用率" subtitle={`${WORKER_STATS.active} / ${WORKER_STATS.total} 活跃`} />
+          <CardHeader title="Worker 利用率" subtitle={`${workerStats.active} / ${workerStats.total} 活跃`} />
           <div className="flex flex-col items-center gap-5 py-2">
             <RingProgress
-              value={WORKER_STATS.utilization}
+              value={workerStats.utilization}
               tone="brand"
-              label={`${Math.round(WORKER_STATS.utilization * 100)}%`}
+              label={`${Math.round(workerStats.utilization * 100)}%`}
               sublabel="已占用"
             />
             <div className="w-full space-y-0.5">
-              <MiniStat label="活跃 worker" value={WORKER_STATS.active} tone="brand" />
-              <MiniStat label="池内排队" value={WORKER_STATS.queued} tone="sky" />
-              <MiniStat label="队列容量" value={WORKER_STATS.queueCapacity} />
+              <MiniStat label="活跃 worker" value={workerStats.active} tone="brand" />
+              <MiniStat label="池内排队" value={workerStats.queued} tone="sky" />
+              <MiniStat label="队列容量" value={workerStats.queueCapacity} />
               <MiniStat label="P95 排队等待" value="18ms" tone="mint" />
             </div>
           </div>
@@ -143,7 +154,7 @@ export default function Dashboard() {
             }
           />
           <div className="scrollbar-none max-h-[268px] space-y-1 overflow-y-auto pr-1">
-            {ACTIVITY.map((item) => {
+            {activity.map((item) => {
               const Icon = KIND_ICON[item.kind];
               return (
                 <div
@@ -177,7 +188,7 @@ export default function Dashboard() {
 
         <Card>
           <CardHeader title="Token 消耗分布" subtitle="按 Provider 聚合" />
-          <BarSeries items={TOKEN_BY_PROVIDER} />
+          <BarSeries items={tokenByProvider} />
           <div className="divider my-4" />
           <div className="space-y-0.5">
             <MiniStat label="总消耗" value="3.42M" tone="brand" />
@@ -204,13 +215,7 @@ export default function Dashboard() {
         </div>
 
         <div className="px-2 pb-2">
-          {[
-            { id: 1284, wf: "技术分析工作流", st: "succeeded", ms: 2302, tok: 3796 },
-            { id: 1283, wf: "多模型对比评测", st: "running", ms: 3180, tok: 1930 },
-            { id: 1282, wf: "知识库问答", st: "succeeded", ms: 1210, tok: 1560 },
-            { id: 1279, wf: "定时数据巡检", st: "failed", ms: 640, tok: 0 },
-            { id: 1278, wf: "知识库问答", st: "succeeded", ms: 980, tok: 1420 },
-          ].map((t) => (
+          {recentTasks.map((t) => (
             <Link
               key={t.id}
               to={`/tasks/${t.id}`}
@@ -219,13 +224,13 @@ export default function Dashboard() {
               <span className="tnum w-14 shrink-0 font-mono text-xs text-fg-subtle">
                 #{t.id}
               </span>
-              <span className="min-w-0 flex-1 truncate text-xs text-fg">{t.wf}</span>
-              <StatusBadge status={t.st} />
+              <span className="min-w-0 flex-1 truncate text-xs text-fg">{t.workflow}</span>
+              <StatusBadge status={t.status} />
               <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {t.ms >= 1000 ? `${(t.ms / 1000).toFixed(1)}s` : `${t.ms}ms`}
+                {t.durationMs >= 1000 ? `${(t.durationMs / 1000).toFixed(1)}s` : `${t.durationMs}ms`}
               </span>
               <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {t.tok.toLocaleString()} tok
+                {t.totalTokens.toLocaleString()} tok
               </span>
             </Link>
           ))}

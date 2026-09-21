@@ -269,7 +269,7 @@ export interface TaskRow {
   nodes: TaskNodeRow[];
 }
 
-const NODE_SETS: Record<number, TaskNodeRow[]> = {
+export const NODE_SETS: Record<number, TaskNodeRow[]> = {
   1: [
     { key: "parse", type: "input", status: "succeeded", durationMs: 2, tokensIn: 0, tokensOut: 0 },
     { key: "rag", type: "rag", status: "succeeded", durationMs: 34, tokensIn: 0, tokensOut: 0, message: "命中 3 条上下文" },
@@ -532,6 +532,62 @@ export interface EditorNode {
     timeoutSec?: number;
   };
 }
+
+/* --------------------------------------------------------- Prompt 模板 */
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  category: "通用" | "分析" | "写作" | "翻译" | "代码";
+  prompt: string;
+  system?: string;
+}
+
+export const PROMPT_TEMPLATES: PromptTemplate[] = [
+  {
+    id: "tpl-analyst",
+    name: "技术分析专家",
+    category: "分析",
+    system:
+      "你是一名资深技术分析师，擅长从复杂信息中提取关键结论。回答要求结构清晰、逻辑严谨，优先使用 bullet points。",
+    prompt: "请分析以下内容，给出：1) 核心结论  2) 关键数据  3) 风险与建议\n\n{{input}}",
+  },
+  {
+    id: "tpl-summarize",
+    name: "内容摘要",
+    category: "通用",
+    prompt: "请用不超过 300 字总结以下内容，保留关键信息和数据：\n\n{{input}}",
+  },
+  {
+    id: "tpl-translate-en",
+    name: "中英互译",
+    category: "翻译",
+    prompt:
+      "请将以下内容翻译成中文（如果已是中文则翻译成英文），保持专业术语准确：\n\n{{input}}",
+  },
+  {
+    id: "tpl-code-review",
+    name: "代码评审",
+    category: "代码",
+    system: "你是一名严格的代码评审专家，关注正确性、性能、可读性和安全性。",
+    prompt: "请评审以下代码，从正确性、性能、可读性、安全性四个维度给出反馈：\n\n```\n{{input}}\n```",
+  },
+  {
+    id: "tpl-technical-report",
+    name: "技术报告",
+    category: "写作",
+    prompt:
+      "请根据以下信息撰写一份结构化技术报告，包含：摘要、背景、方法、结果、结论五个部分：\n\n{{input}}",
+  },
+  {
+    id: "tpl-rag-answer",
+    name: "知识库问答",
+    category: "通用",
+    system: "请基于提供的参考资料回答用户问题。如果资料中没有答案，请明确说明。",
+    prompt:
+      "参考资料：\n{{context}}\n\n用户问题：{{query}}\n\n请基于参考资料回答：",
+  },
+];
 
 // 编辑器初始布局。坐标刻意排得紧凑（列距 210 / 行距 150）：
 // 画布在 1440 视口下只有约 700px 可用宽，图越宽 fitView 缩得越狠、字越小。

@@ -1,5 +1,6 @@
 import { Outlet, useNavigate } from "react-router-dom";
 import { useSession } from "@/lib/session";
+import { ErrorBoundary } from "@/components/ui";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 
@@ -32,7 +33,12 @@ export function AppShell() {
 
         <main className="scrollbar-none flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-[1400px] px-6 py-6">
-            <Outlet />
+            <ErrorBoundary
+              title="页面加载失败"
+              description="当前页面出现了错误，侧边栏和顶栏仍然可用，你可以切换到其他页面继续操作。"
+            >
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </main>
       </div>
