@@ -5,7 +5,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 /** 路由 → 标题/说明。用于顶栏展示当前位置。 */
 const TITLES: Record<string, { title: string; subtitle: string }> = {
-  "/": { title: "Dashboard", subtitle: "系统实时概览" },
+  "/": { title: "控制台", subtitle: "系统实时概览" },
   "/workflows": { title: "工作流", subtitle: "编排与发布 DAG" },
   "/tasks": { title: "任务", subtitle: "执行记录与实时日志" },
   "/knowledge": { title: "知识库", subtitle: "文档索引与 RAG 检索" },
