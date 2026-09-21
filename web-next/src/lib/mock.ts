@@ -479,7 +479,7 @@ export const PROVIDERS: Provider[] = [
   {
     id: 2,
     name: "Ollama",
-    baseUrl: "http://localhost:11434",
+    baseUrl: "https://localhost:11434",
     status: "enabled",
     priority: 2,
     latencyMs: 340,

@@ -4,11 +4,7 @@ import {
   Activity as ActivityIcon,
   AlertTriangle,
   ArrowUpRight,
-  Boxes,
   CircleDot,
-  Clock,
-  Cpu,
-  Layers,
   RefreshCw,
   Server,
   Zap,
@@ -36,7 +32,7 @@ import {
   WORKER_STATS,
   type ActivityKind,
 } from "@/lib/mock";
-import { clockOf, cn, fmtDuration } from "@/lib/utils";
+import { clockOf, cn } from "@/lib/utils";
 
 const KIND_ICON: Record<ActivityKind, typeof Zap> = {
   task: Zap,
@@ -56,7 +52,7 @@ export default function Dashboard() {
   const [range, setRange] = useState<"24h" | "7d" | "30d">("24h");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {/* 页头 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -98,7 +94,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* 趋势 + 资源 */}
+      {/* 趋势 + Worker 利用率 */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader
@@ -127,54 +123,14 @@ export default function Dashboard() {
               <MiniStat label="活跃 worker" value={WORKER_STATS.active} tone="brand" />
               <MiniStat label="池内排队" value={WORKER_STATS.queued} tone="sky" />
               <MiniStat label="队列容量" value={WORKER_STATS.queueCapacity} />
+              <MiniStat label="P95 排队等待" value="18ms" tone="mint" />
             </div>
           </div>
         </Card>
       </div>
 
-      {/* 队列 / 活动流 */}
+      {/* 实时活动 + Token 分布 */}
       <div className="grid gap-4 lg:grid-cols-3">
-        <Card>
-          <CardHeader
-            title="Worker Pool"
-            subtitle="固定 20 worker · 背压已生效"
-            action={<Badge tone="sky">队列 {WORKER_STATS.queued}</Badge>}
-          />
-          <div className="space-y-4">
-            {/* worker 槽位可视化 */}
-            <div>
-              <div className="mb-2 flex items-center justify-between text-2xs text-fg-subtle">
-                <span>槽位占用</span>
-                <span className="tnum">
-                  {WORKER_STATS.active}/{WORKER_STATS.total}
-                </span>
-              </div>
-              <div className="grid grid-cols-10 gap-1.5">
-                {Array.from({ length: WORKER_STATS.total }).map((_, i) => (
-                  <div
-                    key={i}
-                    title={`worker-${String(i + 1).padStart(2, "0")}`}
-                    className={cn(
-                      "h-6 rounded-[5px] transition-colors duration-300",
-                      i < WORKER_STATS.active
-                        ? "bg-brand"
-                        : "bg-surface-3",
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="divider" />
-
-            <div className="space-y-0.5">
-              <MiniStat label="P95 排队等待" value="18ms" tone="mint" />
-              <MiniStat label="P95 节点执行" value="1.4s" />
-              <MiniStat label="背压触发次数" value="3" tone="amber" />
-            </div>
-          </div>
-        </Card>
-
         <Card className="lg:col-span-2">
           <CardHeader
             title="实时活动"
@@ -218,10 +174,7 @@ export default function Dashboard() {
             })}
           </div>
         </Card>
-      </div>
 
-      {/* Token 分布 + 最近任务 */}
-      <div className="grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader title="Token 消耗分布" subtitle="按 Provider 聚合" />
           <BarSeries items={TOKEN_BY_PROVIDER} />
@@ -232,72 +185,52 @@ export default function Dashboard() {
             <MiniStat label="缓存命中率" value="41%" tone="mint" />
           </div>
         </Card>
+      </div>
 
-        <Card className="lg:col-span-2" pad={false}>
-          <div className="flex items-center justify-between px-5 pb-3.5 pt-5">
-            <div>
-              <h3 className="text-sm font-semibold text-fg">最近任务</h3>
-              <p className="mt-0.5 text-xs text-fg-subtle">最新 5 条执行记录</p>
-            </div>
+      {/* 最近任务 */}
+      <Card pad={false}>
+        <div className="flex items-center justify-between px-5 pb-3.5 pt-5">
+          <div>
+            <h3 className="text-sm font-semibold text-fg">最近任务</h3>
+            <p className="mt-0.5 text-xs text-fg-subtle">最新 5 条执行记录</p>
+          </div>
+          <Link
+            to="/tasks"
+            className="inline-flex items-center gap-1 text-xs text-brand hover:underline"
+          >
+            查看全部
+            <ArrowUpRight size={12} />
+          </Link>
+        </div>
+
+        <div className="px-2 pb-2">
+          {[
+            { id: 1284, wf: "技术分析工作流", st: "succeeded", ms: 2302, tok: 3796 },
+            { id: 1283, wf: "多模型对比评测", st: "running", ms: 3180, tok: 1930 },
+            { id: 1282, wf: "知识库问答", st: "succeeded", ms: 1210, tok: 1560 },
+            { id: 1279, wf: "定时数据巡检", st: "failed", ms: 640, tok: 0 },
+            { id: 1278, wf: "知识库问答", st: "succeeded", ms: 980, tok: 1420 },
+          ].map((t) => (
             <Link
-              to="/tasks"
-              className="inline-flex items-center gap-1 text-xs text-brand hover:underline"
+              key={t.id}
+              to={`/tasks/${t.id}`}
+              className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"
             >
-              查看全部
-              <ArrowUpRight size={12} />
+              <span className="tnum w-14 shrink-0 font-mono text-xs text-fg-subtle">
+                #{t.id}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-xs text-fg">{t.wf}</span>
+              <StatusBadge status={t.st} />
+              <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
+                {t.ms >= 1000 ? `${(t.ms / 1000).toFixed(1)}s` : `${t.ms}ms`}
+              </span>
+              <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
+                {t.tok.toLocaleString()} tok
+              </span>
             </Link>
-          </div>
-
-          <div className="px-2 pb-2">
-            {[
-              { id: 1284, wf: "技术分析工作流", st: "succeeded", ms: 2302, tok: 3796 },
-              { id: 1283, wf: "多模型对比评测", st: "running", ms: 3180, tok: 1930 },
-              { id: 1282, wf: "知识库问答", st: "succeeded", ms: 1210, tok: 1560 },
-              { id: 1279, wf: "定时数据巡检", st: "failed", ms: 640, tok: 0 },
-              { id: 1278, wf: "知识库问答", st: "succeeded", ms: 980, tok: 1420 },
-            ].map((t) => (
-              <Link
-                key={t.id}
-                to={`/tasks/${t.id}`}
-                className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"
-              >
-                <span className="tnum w-14 shrink-0 font-mono text-xs text-fg-subtle">
-                  #{t.id}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-xs text-fg">{t.wf}</span>
-                <StatusBadge status={t.st} />
-                <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                  {fmtDuration(t.ms)}
-                </span>
-                <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                  {t.tok.toLocaleString()} tok
-                </span>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      {/* 底部：系统资源 */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          { icon: Cpu, label: "CPU", value: "38%", sub: "8 vCPU" },
-          { icon: Layers, label: "内存", value: "1.2 GB", sub: "上限 2 GB" },
-          { icon: Boxes, label: "Postgres 连接", value: "6 / 20", sub: "池使用率 30%" },
-          { icon: Clock, label: "Redis PEL", value: "0", sub: "无遗留消息" },
-        ].map(({ icon: Icon, label, value, sub }) => (
-          <Card key={label} className="flex items-center gap-3.5">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-fg-muted">
-              <Icon size={15} />
-            </div>
-            <div className="min-w-0">
-              <div className="text-2xs text-fg-subtle">{label}</div>
-              <div className="tnum text-sm font-semibold text-fg">{value}</div>
-              <div className="truncate text-2xs text-fg-subtle">{sub}</div>
-            </div>
-          </Card>
-        ))}
-      </div>
+          ))}
+        </div>
+      </Card>
     </div>
   );
 }

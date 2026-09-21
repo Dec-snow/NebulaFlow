@@ -1,7 +1,6 @@
 import { useLocation } from "react-router-dom";
-import { Bell, Command, Search } from "lucide-react";
+import { Bell } from "lucide-react";
 import { Avatar, IconButton } from "@/components/ui";
-import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 
 /** 路由 → 标题/说明。用于顶栏展示当前位置。 */
@@ -39,25 +38,7 @@ export function Topbar({ username }: { username: string }) {
           )}
         </div>
 
-        {/* 搜索（占位，演示视觉） */}
-        <div className="ml-auto hidden max-w-xs flex-1 md:block">
-          <button
-            className={cn(
-              "group flex h-9 w-full items-center gap-2 rounded-lg border border-line",
-              "bg-surface/70 px-3 text-left text-xs text-fg-subtle",
-              "transition-colors hover:border-line-strong hover:bg-surface",
-            )}
-          >
-            <Search size={14} className="shrink-0" />
-            <span className="flex-1">搜索工作流、任务…</span>
-            <span className="kbd">
-              <Command size={10} />
-              <span className="ml-0.5">K</span>
-            </span>
-          </button>
-        </div>
-
-        <div className="ml-auto flex items-center gap-2 md:ml-0">
+        <div className="ml-auto flex items-center gap-2">
           <ThemeToggle />
           <div className="relative">
             <IconButton label="通知" variant="ghost">
