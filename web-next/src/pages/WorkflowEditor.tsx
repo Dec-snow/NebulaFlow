@@ -125,7 +125,7 @@ const PALETTE: { type: NodeKind; hint: string }[] = [
 /** 新节点的默认配置，避免拖进来就是空表单。 */
 const DEFAULT_CONFIG: Record<NodeKind, EditorNode["config"]> = {
   input: {},
-  llm: { model: "deepseek-chat", prompt: "", system: "", maxRetry: 2, timeoutSec: 60 },
+  llm: { model: "deepseek-v3", prompt: "", system: "", maxRetry: 2, timeoutSec: 60 },
   rag: { knowledgeBaseId: 1, prompt: "", maxRetry: 2, timeoutSec: 60 },
   tool: { tool: "time", maxRetry: 2, timeoutSec: 60 },
   output: {},
@@ -633,10 +633,12 @@ function EditorInner() {
                       value={current.data.config.model ?? ""}
                       onChange={(e) => patch(current.id, { model: e.target.value })}
                     >
-                      <option value="deepseek-chat">deepseek-chat</option>
-                      <option value="deepseek-reasoner">deepseek-reasoner</option>
-                      <option value="qwen2.5:7b">qwen2.5:7b</option>
+                      <option value="deepseek-v3">deepseek-v3</option>
+                      <option value="deepseek-r1">deepseek-r1</option>
+                      <option value="gpt-4o">gpt-4o</option>
                       <option value="gpt-4o-mini">gpt-4o-mini</option>
+                      <option value="glm-4-plus">glm-4-plus</option>
+                      <option value="claude-3.5-sonnet">claude-3.5-sonnet</option>
                     </Select>
                   </Field>
                   <Field label="System 提示词">

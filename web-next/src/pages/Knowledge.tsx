@@ -89,7 +89,7 @@ export default function Knowledge() {
             <div className="flex items-center gap-2.5">
               <Sparkles size={14} className="text-brand" />
               <p className="text-2xs leading-relaxed text-fg-subtle">
-                Embedding 支持 OpenAI / Ollama，失败时自动降级到本地确定性 hash 向量。
+                Embedding 支持 DeepSeek / OpenAI，失败时自动降级到本地确定性 hash 向量。
               </p>
             </div>
           </Card>

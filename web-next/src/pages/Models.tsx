@@ -164,7 +164,7 @@ export default function Models() {
         <div className="mt-4 flex items-center gap-2.5 rounded-lg border border-line bg-surface-2/50 px-3.5 py-2.5">
           <Boxes size={14} className="shrink-0 text-fg-subtle" />
           <p className="text-2xs leading-relaxed text-fg-muted">
-            全部 Provider 不可用时自动回退到 Mock Provider，保证离线仍可演示完整链路。
+            支持按权重 / 优先级 / 延迟动态路由，首 token 之前可安全切换 Provider。
           </p>
         </div>
       </Card>

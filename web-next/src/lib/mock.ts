@@ -68,7 +68,7 @@ export const KPIS: Kpi[] = [
     label: "Token 消耗",
     value: 3.4,
     unit: "M",
-    delta: 21.7,
+    delta: 8.3,
     deltaGood: "down",
     tone: "violet",
     spark: series(24, 130, 60),
@@ -89,9 +89,9 @@ export const WORKER_STATS = {
 
 export const TOKEN_BY_PROVIDER = [
   { label: "DeepSeek", value: 1_820_400, tone: "brand" as const },
-  { label: "Ollama", value: 940_200, tone: "sky" as const },
-  { label: "OpenAI", value: 512_800, tone: "mint" as const },
-  { label: "MiMo", value: 148_600, tone: "violet" as const },
+  { label: "OpenAI", value: 940_200, tone: "mint" as const },
+  { label: "智谱 AI", value: 512_800, tone: "sky" as const },
+  { label: "Anthropic", value: 148_600, tone: "violet" as const },
 ];
 
 /* ------------------------------------------------------------------ 活动流 */
@@ -273,9 +273,9 @@ const NODE_SETS: Record<number, TaskNodeRow[]> = {
   1: [
     { key: "parse", type: "input", status: "succeeded", durationMs: 2, tokensIn: 0, tokensOut: 0 },
     { key: "rag", type: "rag", status: "succeeded", durationMs: 34, tokensIn: 0, tokensOut: 0, message: "命中 3 条上下文" },
-    { key: "analyst", type: "llm", status: "succeeded", durationMs: 1420, tokensIn: 486, tokensOut: 890, message: "deepseek-chat" },
+    { key: "analyst", type: "llm", status: "succeeded", durationMs: 1420, tokensIn: 486, tokensOut: 890, message: "deepseek-v3" },
     { key: "clock", type: "tool", status: "succeeded", durationMs: 3, tokensIn: 0, tokensOut: 0 },
-    { key: "writer", type: "llm", status: "succeeded", durationMs: 842, tokensIn: 1240, tokensOut: 1180, message: "deepseek-chat" },
+    { key: "writer", type: "llm", status: "succeeded", durationMs: 842, tokensIn: 1240, tokensOut: 1180, message: "deepseek-v3" },
     { key: "out", type: "output", status: "succeeded", durationMs: 1, tokensIn: 0, tokensOut: 0 },
   ],
   2: [
@@ -314,7 +314,7 @@ export const TASKS: TaskRow[] = [
     durationMs: 3180,
     tokens: 1930,
     startedAt: ago(1.2),
-    input: "对比 deepseek / ollama / openai 在代码解释任务上的表现",
+    input: "对比 deepseek / openai / 智谱在代码解释任务上的表现",
     nodes: NODE_SETS[3],
   },
   {
@@ -469,45 +469,50 @@ export const PROVIDERS: Provider[] = [
     baseUrl: "https://api.deepseek.com/v1",
     status: "enabled",
     priority: 1,
-    latencyMs: 820,
+    latencyMs: 680,
     isDefault: true,
     models: [
-      { name: "deepseek-chat", maxTokens: 8192 },
-      { name: "deepseek-reasoner", maxTokens: 16384 },
+      { name: "deepseek-v3", maxTokens: 65536 },
+      { name: "deepseek-r1", maxTokens: 65536 },
     ],
   },
   {
     id: 2,
-    name: "Ollama",
-    baseUrl: "https://localhost:11434",
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
     status: "enabled",
     priority: 2,
-    latencyMs: 340,
+    latencyMs: 950,
     isDefault: false,
     models: [
-      { name: "qwen2.5:7b", maxTokens: 4096 },
-      { name: "llama3.1:8b", maxTokens: 8192 },
+      { name: "gpt-4o-mini", maxTokens: 128000 },
+      { name: "gpt-4o", maxTokens: 128000 },
     ],
   },
   {
     id: 3,
-    name: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    status: "degraded",
+    name: "智谱 AI",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    status: "enabled",
     priority: 3,
-    latencyMs: 2140,
+    latencyMs: 720,
     isDefault: false,
-    models: [{ name: "gpt-4o-mini", maxTokens: 16384 }],
+    models: [
+      { name: "glm-4-plus", maxTokens: 128000 },
+      { name: "glm-4-flash", maxTokens: 128000 },
+    ],
   },
   {
     id: 4,
-    name: "MiMo",
-    baseUrl: "https://api.mimo.ai/v1",
-    status: "disabled",
+    name: "Anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    status: "degraded",
     priority: 4,
-    latencyMs: 0,
+    latencyMs: 1820,
     isDefault: false,
-    models: [{ name: "mimo-7b", maxTokens: 4096 }],
+    models: [
+      { name: "claude-3.5-sonnet", maxTokens: 200000 },
+    ],
   },
 ];
 
@@ -545,7 +550,7 @@ export const EDITOR_NODES: EditorNode[] = [
     x: 230,
     y: 170,
     config: {
-      model: "deepseek-chat",
+      model: "deepseek-v3",
       prompt: "分析输入内容",
       system: "你是资深架构师，回答要具体到实现细节。",
       maxRetry: 2,
@@ -558,7 +563,7 @@ export const EDITOR_NODES: EditorNode[] = [
     type: "llm",
     x: 440,
     y: 170,
-    config: { model: "deepseek-chat", prompt: "汇总成技术报告" },
+    config: { model: "deepseek-v3", prompt: "汇总成技术报告" },
   },
   { id: "out", type: "output", x: 650, y: 170, config: {} },
 ];

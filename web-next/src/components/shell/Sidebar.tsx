@@ -33,7 +33,7 @@ interface NavGroup {
 const GROUPS: NavGroup[] = [
   {
     title: "总览",
-    items: [{ to: "/", label: "Dashboard", icon: LayoutDashboard, end: true }],
+    items: [{ to: "/", label: "控制台", icon: LayoutDashboard, end: true }],
   },
   {
     title: "编排",
@@ -137,7 +137,7 @@ export function Sidebar({
             <span className="text-2xs font-medium text-fg">所有系统正常</span>
           </div>
           <p className="mt-1 text-2xs leading-relaxed text-fg-subtle">
-            Postgres · Redis · 20 workers
+            工作流引擎 · DAG 调度 · 模型路由
           </p>
         </div>
       )}
