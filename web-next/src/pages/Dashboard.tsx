@@ -230,7 +230,7 @@ export default function Dashboard() {
                 {t.durationMs >= 1000 ? `${(t.durationMs / 1000).toFixed(1)}s` : `${t.durationMs}ms`}
               </span>
               <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {t.totalTokens.toLocaleString()} tok
+                {t.tokens.toLocaleString()} tok
               </span>
             </Link>
           ))}
