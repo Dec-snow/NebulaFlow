@@ -35,10 +35,10 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: web-next/package-lock.json
 
       - name: Frontend build
-        working-directory: web
+        working-directory: web-next
         run: |
           npm ci
           npm run build
