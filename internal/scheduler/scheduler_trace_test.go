@@ -51,16 +51,18 @@ func traceHasSpan(tr *tracing.Trace, name string) bool {
 
 // waitTaskDone 轮询到任务进入终态。用轮询而不是固定 sleep：
 // 固定 sleep 要么白等、要么在慢机器上偶发失败。
-func waitTaskDone(t *testing.T, tk *model.Task, timeout time.Duration) {
+// 通过 store.GetTaskByID 读取（内部有锁），避免与 consumeLoop 的写入产生数据竞争。
+func waitTaskDone(t *testing.T, rig *testRig, taskID int64, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if tk.Status != model.TaskPending && tk.Status != model.TaskRunning {
+		tk, err := rig.tasks.GetTaskByID(context.Background(), taskID)
+		if err == nil && tk.Status != model.TaskPending && tk.Status != model.TaskRunning {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("任务在 %v 内未进入终态，当前 %s", timeout, tk.Status)
+	t.Fatalf("任务在 %v 内未进入终态", timeout)
 }
 
 // waitTraceSpan 轮询到 trace 里出现指定 span 后返回快照。
@@ -137,7 +139,7 @@ func TestExecuteTaskContinuesUpstreamTrace(t *testing.T) {
 		queue.Job{TaskID: tk.ID, TraceParent: tp}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	waitTaskDone(t, tk, 5*time.Second)
+	waitTaskDone(t, rig, tk.ID, 5*time.Second)
 	stopConsume()
 
 	if tk.Status != model.TaskSucceeded {
