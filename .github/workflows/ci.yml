@@ -9,7 +9,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}
+  IMAGE: ghcr.io/dec-snow/nebulaflow
 
 jobs:
   test:
