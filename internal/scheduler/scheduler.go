@@ -81,6 +81,9 @@ type Scheduler struct {
 	// agentRegistry 是 Agent 注册中心（可为 nil，表示未启用）。
 	// Supervisor 节点和 Agent 节点通过它查找和实例化 Agent Runtime。
 	agentRegistry *agent.Registry
+	// agentRouter 是动态路由策略（可为 nil，表示用默认 SmartRouter）。
+	// 当 LLM 节点配置了 agent_id 或能力要求时，通过 Router 动态选择 Agent。
+	agentRouter agent.Router
 	// tracing 提供进程内 span 存储（用于 task → trace 反查与归属校验）。
 	// 为 nil 时一切退化为空操作；span 本身的创建走包级函数，不依赖这个字段。
 	tracing *tracing.Provider
@@ -263,6 +266,12 @@ func (s *Scheduler) SetTracing(p *tracing.Provider) { s.tracing = p }
 // 生产模式下有 Redis 就应该注入，否则同一工作流可在多实例上同时执行
 // （产生脏 task_nodes、重复 LLM 调用、输出错位）。
 func (s *Scheduler) SetWorkflowLock(l WorkflowLock) { s.wfLock = l }
+
+// SetAgentRouter 注入动态路由策略（main 装配时调用）。
+//
+// 为 nil 时 Supervisor 内部会创建默认的 SmartRouter。
+// 注入后，LLM 节点配置了 agent_id 时也能走动态路由。
+func (s *Scheduler) SetAgentRouter(r agent.Router) { s.agentRouter = r }
 
 // consumerCount 解析实际生效的消费并发度：显式设置优先，否则跟随 WorkerPool，
 // 最后兜底为 1（宁可串行也不能是 0，否则 Run 会起 0 个消费者直接"静默停摆"）。

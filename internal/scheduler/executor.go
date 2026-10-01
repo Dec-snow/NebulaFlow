@@ -609,7 +609,8 @@ func (s *Scheduler) runSupervisorNode(ctx context.Context, j worker.NodeJob) (wo
 	supervisor := agent.NewSupervisorAgent(agent.SupervisorConfig{
 		Supervisor:  supervisorRuntime,
 		Registry:    s.agentRegistry,
-		UserID:      0, // TODO: 从任务里取 user_id
+		Router:      s.agentRouter, // 动态路由策略（nil 时 SmartRouter 兜底）
+		UserID:      j.UserID,
 		MaxSubTasks: maxSubTasks,
 	})
 

@@ -57,10 +57,12 @@ type SupervisorPlan struct {
 //   - 专业分工：不同子任务用不同专长的 Agent
 //   - 结果质量：Supervisor 做"质检员"，汇总时可发现并修正子任务的问题
 type SupervisorAgent struct {
-	// SupervisorRuntime 是负责拆解任务和汇总结果的 Agent
+	// Supervisor 是负责拆解任务和汇总结果的 Agent
 	Supervisor Runtime
 	// Registry 用于查找子 Agent
 	Registry *Registry
+	// Router 是动态路由策略；如果为 nil，assignAgents 内部会创建默认的 SmartRouter。
+	Router Router
 	// UserID 是当前用户（用于从注册中心查找可见的 Agent）
 	UserID int64
 	// MaxSubTasks 是最大子任务数，防止拆得太碎
@@ -71,6 +73,7 @@ type SupervisorAgent struct {
 type SupervisorConfig struct {
 	Supervisor  Runtime   // 主管 Agent，负责任务拆解与汇总
 	Registry    *Registry // Agent 注册中心
+	Router      Router    // 动态路由策略（可选，nil 时用 SmartRouter）
 	UserID      int64     // 当前用户 ID
 	MaxSubTasks int       // 最大子任务数（默认 5）
 }
@@ -84,6 +87,7 @@ func NewSupervisorAgent(cfg SupervisorConfig) *SupervisorAgent {
 	return &SupervisorAgent{
 		Supervisor:  cfg.Supervisor,
 		Registry:    cfg.Registry,
+		Router:      cfg.Router,
 		UserID:      cfg.UserID,
 		MaxSubTasks: max,
 	}
@@ -198,8 +202,17 @@ JSON 格式：
 	return plan, nil
 }
 
-// assignAgents 为每个子任务从注册中心找最合适的 Agent。
-// 优先按名称精确匹配，找不到则按能力匹配，再不行用第一个可用的。
+// assignAgents 为每个子任务通过动态路由策略找到最合适的 Agent。
+//
+// 路由策略：
+//   1. 如果子任务指定了 agent_name，通过 Router 按名称找
+//   2. 否则根据子任务推断的能力，通过 Router 按能力找
+//   3. 兜底：用 Supervisor 自己
+//
+// 使用 Router 接口而不是直接调 Registry 的好处：
+//   - 策略可替换（SmartRouter / RoundRobinRouter / 自定义）
+//   - 健康检查和故障转移由 Router 统一处理
+//   - 路由决策有 Reason 可审计
 func (s *SupervisorAgent) assignAgents(ctx context.Context, subtasks []SubTask) (map[string]Runtime, error) {
 	agentMap := make(map[string]Runtime)
 
@@ -211,48 +224,34 @@ func (s *SupervisorAgent) assignAgents(ctx context.Context, subtasks []SubTask) 
 		return agentMap, nil
 	}
 
-	// 列出所有可用 Agent 一次，避免重复查库
-	allAgents, err := s.Registry.List(ctx, s.UserID, "", "")
-	if err != nil {
-		// 查不到就都用 supervisor
-		for _, st := range subtasks {
-			agentMap[st.ID] = s.Supervisor
-		}
-		return agentMap, nil
-	}
-	if len(allAgents) == 0 {
-		for _, st := range subtasks {
-			agentMap[st.ID] = s.Supervisor
-		}
-		return agentMap, nil
+	// 初始化 Router（如果未注入）
+	router := s.Router
+	if router == nil {
+		router = NewSmartRouter(s.Registry, nil)
 	}
 
 	for _, st := range subtasks {
-		// 先按名称精确匹配
-		if a, err := s.Registry.GetByName(ctx, s.UserID, st.AgentName); err == nil {
-			if rt, err := s.Registry.GetRuntime(ctx, a.ID); err == nil {
-				agentMap[st.ID] = rt
-				continue
+		// 构造路由请求
+		req := RouteRequest{
+			AgentName:    st.AgentName,
+			PreferHealthy: true,
+		}
+
+		// 按子任务名称推断能力
+		if st.AgentName != "" {
+			cap := inferCapability(st.AgentName)
+			if cap != "" {
+				req.Capabilities = []string{cap}
 			}
 		}
 
-		// 再按能力匹配（根据 agent 名称推断能力）
-		cap := inferCapability(st.AgentName)
-		if cap != "" {
-			if matches, err := s.Registry.FindByCapability(ctx, s.UserID, cap); err == nil && len(matches) > 0 {
-				if rt, err := s.Registry.GetRuntime(ctx, matches[0].ID); err == nil {
-					agentMap[st.ID] = rt
-					continue
-				}
-			}
-		}
-
-		// 兜底：用第一个可用的 Agent
-		if rt, err := s.Registry.GetRuntime(ctx, allAgents[0].ID); err == nil {
-			agentMap[st.ID] = rt
-		} else {
+		result, err := router.Route(ctx, req)
+		if err != nil || result.Runtime == nil {
+			// 路由失败，用 Supervisor 兜底
 			agentMap[st.ID] = s.Supervisor
+			continue
 		}
+		agentMap[st.ID] = result.Runtime
 	}
 
 	return agentMap, nil
