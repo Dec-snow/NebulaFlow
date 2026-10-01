@@ -171,6 +171,15 @@ func (r *TaskRepo) UpdateTaskNode(ctx context.Context, n *model.TaskNode) error 
 	return err
 }
 
+// UpdateNodeRetries 只更新重试计数（轻量操作，节点重试过程中调用）。
+func (r *TaskRepo) UpdateNodeRetries(ctx context.Context, taskID int64, nodeKey string, retries int) error {
+	_, err := r.db.Pool.Exec(ctx,
+		`UPDATE task_nodes SET retries=$3 WHERE task_id=$1 AND node_key=$2`,
+		taskID, nodeKey, retries,
+	)
+	return err
+}
+
 func (r *TaskRepo) AppendLog(ctx context.Context, l *model.TaskLog) error {
 	_, err := r.db.Pool.Exec(ctx,
 		`INSERT INTO task_logs (task_id, node_key, level, message) VALUES ($1, $2, $3, $4)`,

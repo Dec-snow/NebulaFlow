@@ -51,6 +51,7 @@ type TaskStore interface {
 	CreateTaskNodes(ctx context.Context, taskID int64, nodes []model.WorkflowNode) error
 	UpdateTaskStatus(ctx context.Context, id int64, status model.TaskStatus, output, errMsg string) error
 	UpdateTaskNode(ctx context.Context, n *model.TaskNode) error
+	UpdateNodeRetries(ctx context.Context, taskID int64, nodeKey string, retries int) error
 	AppendLog(ctx context.Context, l *model.TaskLog) error
 	RecordUsage(ctx context.Context, u *model.UsageRecord) error
 }
@@ -690,31 +691,68 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 		}
 	}
 
+	// 节点重试计数：node_key -> 已重试次数
+	retryCount := make(map[string]int)
+
+	// 从节点配置读取重试策略
+	getRetryPolicy := func(nodeKey string) model.RetryPolicy {
+		node := dag.Nodes[nodeKey]
+		policy := model.DefaultRetryPolicy
+		if node.Config.Extra != nil {
+			if v, ok := node.Config.Extra["max_retry"]; ok {
+				switch n := v.(type) {
+				case float64:
+					policy.MaxRetry = int(n)
+				case int:
+					policy.MaxRetry = n
+				}
+			}
+			if v, ok := node.Config.Extra["retry_backoff"]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					policy.Backoff = s
+				}
+			}
+			if v, ok := node.Config.Extra["retry_base_ms"]; ok {
+				switch n := v.(type) {
+				case float64:
+					policy.Base = time.Duration(n) * time.Millisecond
+				case int:
+					policy.Base = time.Duration(n) * time.Millisecond
+				}
+			}
+		}
+		return policy
+	}
+
+	// 提交单个节点执行（供 submitReady 和重试共用）
+	submitNode := func(key string) {
+		input := s.assembleInput(key, dag, results, t.Input)
+		j := worker.NodeJob{
+			TaskID: t.ID, UserID: t.UserID, WorkflowID: wf.ID,
+			NodeKey: key, NodeType: dag.Nodes[key].Type,
+			Config: dag.Nodes[key].Config, Input: input,
+			Ctx: runCtx,
+			OnDone: func(res worker.NodeResult, err error) {
+				done <- nodeOutcome{key: key, res: res, err: err}
+			},
+		}
+		if !s.pool.Submit(j) {
+			s.logger.Warn("submit rejected", "task_id", t.ID, "node", key)
+			remaining--
+			if firstErr == nil {
+				firstErr = fmt.Errorf("worker pool is shutting down")
+			}
+			skipDownstream(key, "worker pool unavailable")
+		}
+	}
+
 	submitReady := func() {
 		for _, key := range dag.ReadyNodes(inDegree, submitted) {
 			if submitted[key] {
 				continue
 			}
 			submitted[key] = true
-			input := s.assembleInput(key, dag, results, t.Input)
-			key := key
-			j := worker.NodeJob{
-				TaskID: t.ID, UserID: t.UserID, WorkflowID: wf.ID,
-				NodeKey: key, NodeType: dag.Nodes[key].Type,
-				Config: dag.Nodes[key].Config, Input: input,
-				Ctx: runCtx, // 任务级上下文：取消/超时真正生效
-				OnDone: func(res worker.NodeResult, err error) {
-					done <- nodeOutcome{key: key, res: res, err: err}
-				},
-			}
-			if !s.pool.Submit(j) {
-				s.logger.Warn("submit rejected", "task_id", t.ID, "node", key)
-				remaining--
-				if firstErr == nil {
-					firstErr = fmt.Errorf("worker pool is shutting down")
-				}
-				skipDownstream(key, "worker pool unavailable")
-			}
+			submitNode(key)
 		}
 	}
 
@@ -755,13 +793,45 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 		}
 		select {
 		case o := <-done:
-			remaining--
 			if o.err != nil {
+				// ---- 节点级重试 ----
+				// 审批等待不是错误，不重试
+				if !errors.Is(o.err, errApprovalWaiting) {
+					policy := getRetryPolicy(o.key)
+					retries := retryCount[o.key]
+					if policy.ShouldRetry(retries) {
+						retryCount[o.key] = retries + 1
+						delay := policy.Delay(retries)
+						s.logNode(worker.NodeJob{TaskID: t.ID, NodeKey: o.key, NodeType: dag.Nodes[o.key].Type},
+							"warn", fmt.Sprintf("node failed, will retry %d/%d after %v: %v",
+								retries+1, policy.MaxRetry, delay, o.err))
+
+						// 延迟重试：起一个 goroutine 等 delay 后重新提交
+						// 不减少 remaining（节点还在执行中）
+						// submitted[key] 已经是 true 了，保持不变
+						go func(key string, retries int, delay time.Duration) {
+							// 用 time.After 等，但如果任务取消了就提前退出
+							select {
+							case <-runCtx.Done():
+								return
+							case <-time.After(delay):
+								// 更新数据库里的重试计数
+								s.updateNodeRetryCount(runCtx, t.ID, key, retries)
+								submitNode(key)
+							}
+						}(o.key, retries+1, delay)
+						continue // 不减少 remaining，不处理失败
+					}
+				}
+
+				// 重试用完或不需要重试 → 正常失败处理
+				remaining--
 				if firstErr == nil {
 					firstErr = o.err
 				}
 				skipDownstream(o.key, "上游节点 "+o.key+" 执行失败")
 			} else {
+				remaining--
 				results[o.key] = o.res.Output
 				for _, target := range dag.Edges[o.key] {
 					inDegree[target]--
@@ -912,6 +982,12 @@ func (s *Scheduler) finish(ctx context.Context, t *model.Task, status model.Task
 // listTaskNodes 读取任务的全部节点状态（用于 Checkpoint 恢复）。
 func (s *Scheduler) listTaskNodes(ctx context.Context, taskID int64) ([]model.TaskNode, error) {
 	return s.tasks.GetTaskNodes(ctx, taskID)
+}
+
+// updateNodeRetryCount 更新节点的重试计数（用于节点级重试时的可视化展示）。
+// 失败了也无所谓——重试计数主要是给前端 Timeline 看的，不影响核心逻辑。
+func (s *Scheduler) updateNodeRetryCount(ctx context.Context, taskID int64, nodeKey string, retries int) {
+	_ = s.tasks.UpdateNodeRetries(ctx, taskID, nodeKey, retries)
 }
 
 // failTask 处理任务启动阶段（进入调度主循环前）的致命错误。

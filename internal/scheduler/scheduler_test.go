@@ -123,6 +123,19 @@ func (f *fakeTaskStore) UpdateTaskNode(_ context.Context, n *model.TaskNode) err
 	return nil
 }
 
+func (f *fakeTaskStore) UpdateNodeRetries(_ context.Context, taskID int64, nodeKey string, retries int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	list := f.nodes[taskID]
+	for _, existing := range list {
+		if existing.NodeKey == nodeKey {
+			existing.Retries = retries
+			return nil
+		}
+	}
+	return nil
+}
+
 func (f *fakeTaskStore) AppendLog(_ context.Context, l *model.TaskLog) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

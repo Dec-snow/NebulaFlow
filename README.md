@@ -27,9 +27,9 @@ NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模�
 
 |  | 特性 | 说明 |
 |:---:|---|---|
-| 🎯 | **DAG 调度引擎** | Kahn 拓扑排序 + 环检测，入度驱动并发调度，同层节点并行执行 |
+| 🎯 | **DAG 调度引擎** | Kahn 拓扑排序 + 环检测，入度驱动并发调度，节点级指数退避重试 |
 | ⚡ | **Worker Pool** | goroutine 池 + channel 背压，优雅关闭，20 worker 达 464.9 tasks/s |
-| 📨 | **Redis Stream 队列** | Consumer Group + ACK + PEL 崩溃恢复 + 死信队列 + 提交侧背压 |
+| 📨 | **Redis Stream 队列** | 三级优先级（加权轮询避免饥饿）+ Consumer Group + ACK + PEL 崩溃恢复 + 死信队列 + 提交侧背压 |
 | 🔄 | **LLM Gateway** | 多 Provider 抽象 + 自动故障转移 + 流式输出 + 用量统计 |
 | 🤖 | **Agent Runtime 抽象层** | 统一 Runtime 接口，支持自研 Native Agent 与 LangChain Agent 接入 |
 | 📇 | **Agent 注册中心** | 类似 K8s Service Discovery，按能力发现 Agent，动态路由，版本管理 |

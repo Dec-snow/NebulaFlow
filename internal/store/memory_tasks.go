@@ -220,6 +220,22 @@ func (r *memTaskRepo) UpdateTaskNode(_ context.Context, n *model.TaskNode) error
 	return nil
 }
 
+// UpdateNodeRetries 内存版：只更新重试计数。
+func (r *memTaskRepo) UpdateNodeRetries(_ context.Context, taskID int64, nodeKey string, retries int) error {
+	m := r.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cur := m.taskNodes[taskID]
+	for i := range cur {
+		if cur[i].NodeKey == nodeKey {
+			cur[i].Retries = retries
+			return nil
+		}
+	}
+	return ErrTaskNotFound
+}
+
 // ---------- 日志 ----------
 
 func (r *memTaskRepo) AppendLog(_ context.Context, l *model.TaskLog) error {

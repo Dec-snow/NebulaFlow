@@ -48,6 +48,8 @@ type TaskStore interface {
 	CreateTaskNodes(ctx context.Context, taskID int64, nodes []model.WorkflowNode) error
 	CountTaskNodes(ctx context.Context, taskID int64) (int, error)
 	UpdateTaskNode(ctx context.Context, n *model.TaskNode) error
+	// UpdateNodeRetries 更新节点的重试计数（节点级重试时调用，不改变状态）。
+	UpdateNodeRetries(ctx context.Context, taskID int64, nodeKey string, retries int) error
 
 	AppendLog(ctx context.Context, l *model.TaskLog) error
 	ListLogs(ctx context.Context, taskID int64, limit int) ([]model.TaskLog, error)

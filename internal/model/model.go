@@ -108,6 +108,7 @@ type Task struct {
 	WorkflowID int64      `json:"workflow_id"`
 	UserID     int64      `json:"user_id"`
 	Status     TaskStatus `json:"status"`
+	Priority   string     `json:"priority"` // high / normal / low
 	Input      string     `json:"input"`
 	Output     string     `json:"output"`
 	Error      string     `json:"error,omitempty"`
@@ -143,7 +144,9 @@ type TaskNode struct {
 	Output     string         `json:"output,omitempty"`
 	Error      string         `json:"error,omitempty"`
 	DurationMS int64          `json:"duration_ms,omitempty"`
-	Retries    int            `json:"retries"`
+	Retries    int            `json:"retries"`     // 已重试次数
+	MaxRetry   int            `json:"max_retry"`   // 最大重试次数（0=不重试）
+	RetryBackoff string       `json:"retry_backoff"` // 退避策略：exponential / fixed / immediate
 	TokensIn   int            `json:"tokens_in,omitempty"`
 	TokensOut  int            `json:"tokens_out,omitempty"`
 	StartedAt  *time.Time     `json:"started_at,omitempty"`
