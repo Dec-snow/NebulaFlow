@@ -95,10 +95,11 @@ type ToolCallRecord struct {
 //   - LangChainRuntime：调用外部 LangChain / LangServe 服务
 //   - 未来可以扩展 OpenAI Assistant、AutoGPT 等
 //
-// 元数据（Name/Version/Capabilities）的作用：
+// 元数据方法（Name/Version/Capabilities/Tags/Endpoint）的作用：
 //  1. Agent Registry 注册中心：按能力检索 Agent
-//  2. 前端展示：用户能看到每个 Agent 支持什么
+//  2. 前端展示：用户能看到每个 Agent 支持什么、连的是哪个端点
 //  3. 动态路由：根据任务需求自动选择最合适的 Agent
+//  4. 健康监控：HealthCheck 用于探活，调度器可以跳过不健康的 Runtime
 type Runtime interface {
 	// Name 返回 runtime 唯一标识，用于注册与发现。
 	Name() string
@@ -108,6 +109,79 @@ type Runtime interface {
 	Capabilities() []Capability
 	// Description 返回 Agent 的人类可读描述。
 	Description() string
+	// Tags 返回分类标签（如 "production"、"experimental"、"customer-service"）。
+	// 用于 Registry 的多维度过滤和搜索。
+	Tags() []string
+	// Endpoint 返回远程 Runtime 的端点 URL（如 LangChain 的 baseURL）。
+	// 本地 Runtime（如 NativeRuntime）返回空字符串。
+	Endpoint() string
+	// HealthCheck 检查 Runtime 是否可用。
+	// 对于远程 Runtime，通常是一次轻量 HTTP 请求；本地 Runtime 检查依赖是否就绪。
+	// 调度器可以用这个方法跳过不健康的 Runtime，实现故障转移。
+	HealthCheck(ctx context.Context) error
 	// Execute 同步执行一次 Agent 推理，返回最终结果。
 	Execute(ctx context.Context, input Input) (Result, error)
+}
+
+// RuntimeMetadata 是 Runtime 元数据的可序列化快照。
+//
+// 用于 API 响应，一次调用拿到全部元数据，
+// 而不是前端分别请求 Name、Version、Capabilities 等多个字段。
+//
+// 包含健康状态，可以用于运行时面板展示所有 Agent 的状态。
+type RuntimeMetadata struct {
+	Name         string       `json:"name"`
+	Version      string       `json:"version"`
+	Description  string       `json:"description"`
+	Capabilities []Capability `json:"capabilities"`
+	Tags         []string     `json:"tags"`
+	Endpoint     string       `json:"endpoint,omitempty"`
+	Healthy      bool         `json:"healthy"`
+}
+
+// HasCapability 检查 Runtime 是否具备指定能力。
+//
+// 用于动态路由场景：调度器收到任务后，根据任务需求
+// 查找具备相应能力的 Runtime。
+func HasCapability(r Runtime, cap Capability) bool {
+	for _, c := range r.Capabilities() {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+// Metadata 生成 Runtime 的元数据快照（不含健康状态，不执行 HealthCheck）。
+//
+// 适用于不需要实时健康状态的场景（如列表展示），
+// 避免每次展示都触发健康检查（远程 Runtime 的 HealthCheck 可能很慢）。
+func Metadata(r Runtime) RuntimeMetadata {
+	return RuntimeMetadata{
+		Name:         r.Name(),
+		Version:      r.Version(),
+		Description:  r.Description(),
+		Capabilities: r.Capabilities(),
+		Tags:         r.Tags(),
+		Endpoint:     r.Endpoint(),
+	}
+}
+
+// MetadataWithHealth 生成包含健康状态的元数据快照。
+//
+// 会执行 HealthCheck，适用于详情页或调度前的可用性检查。
+// 如果 HealthCheck 失败，Healthy 为 false 但其他元数据仍然返回。
+func MetadataWithHealth(ctx context.Context, r Runtime) RuntimeMetadata {
+	md := Metadata(r)
+	md.Healthy = r.HealthCheck(ctx) == nil
+	return md
+}
+
+// CapLabelMap 将能力列表转为能力名→true 的 map，方便快速查找。
+func CapLabelMap(caps []Capability) map[string]bool {
+	m := make(map[string]bool, len(caps))
+	for _, c := range caps {
+		m[string(c)] = true
+	}
+	return m
 }

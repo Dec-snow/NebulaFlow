@@ -26,6 +26,7 @@ type NativeRuntime struct {
 	name         string
 	version      string
 	description  string
+	tags         []string
 	provider     llm.Provider
 	tools        *tool.Registry
 	defaultModel string
@@ -38,6 +39,7 @@ type NativeConfig struct {
 	Name         string
 	Version      string
 	Description  string
+	Tags         []string
 	Provider     llm.Provider
 	Tools        *tool.Registry
 	DefaultModel string
@@ -59,10 +61,15 @@ func NewNativeRuntime(cfg NativeConfig) *NativeRuntime {
 	if desc == "" {
 		desc = "NebulaFlow 自研 ReAct Agent，支持工具调用与多轮推理"
 	}
+	tags := cfg.Tags
+	if tags == nil {
+		tags = []string{"production", "builtin"}
+	}
 	return &NativeRuntime{
 		name:         name,
 		version:      version,
 		description:  desc,
+		tags:         tags,
 		provider:     cfg.Provider,
 		tools:        cfg.Tools,
 		defaultModel: cfg.DefaultModel,
@@ -73,6 +80,28 @@ func NewNativeRuntime(cfg NativeConfig) *NativeRuntime {
 func (r *NativeRuntime) Name() string        { return r.name }
 func (r *NativeRuntime) Version() string     { return r.version }
 func (r *NativeRuntime) Description() string { return r.description }
+func (r *NativeRuntime) Tags() []string {
+	out := make([]string, len(r.tags))
+	copy(out, r.tags)
+	return out
+}
+// Endpoint 本地 Runtime 没有远程端点，返回空字符串。
+func (r *NativeRuntime) Endpoint() string { return "" }
+
+// HealthCheck 检查 NativeRuntime 是否可用。
+//
+// 本地 Runtime 的健康检查策略：
+//   1. Provider 是否已配置（nil 说明未初始化）
+//   2. 发一次轻量 LLM 请求验证连接（可选，避免每次都发请求）
+//
+// 这里只做静态检查（Provider 是否就绪），不做实际请求，
+// 因为 HealthCheck 可能被频繁调用（每次调度前都检查）。
+func (r *NativeRuntime) HealthCheck(_ context.Context) error {
+	if r.provider == nil {
+		return fmt.Errorf("native runtime: LLM provider not configured")
+	}
+	return nil
+}
 func (r *NativeRuntime) Capabilities() []Capability {
 	caps := []Capability{CapToolCall, CapStreaming}
 	if r.memory != nil {

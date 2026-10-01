@@ -427,3 +427,16 @@ func (s *SupervisorAgent) Description() string { return "Multi-Agent 协作主�
 func (s *SupervisorAgent) Capabilities() []Capability {
 	return []Capability{CapToolCall, CapRAG, CapCode, CapSearch}
 }
+func (s *SupervisorAgent) Tags() []string {
+	return []string{"production", "builtin", "multi-agent", "supervisor"}
+}
+func (s *SupervisorAgent) Endpoint() string { return "" }
+
+// HealthCheck 检查 SupervisorAgent 是否可用。
+// 只要 Registry 已配置就认为健康。
+func (s *SupervisorAgent) HealthCheck(_ context.Context) error {
+	if s.Registry == nil {
+		return fmt.Errorf("supervisor: agent registry not configured")
+	}
+	return nil
+}

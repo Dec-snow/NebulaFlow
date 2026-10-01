@@ -26,6 +26,7 @@ type LangChainRuntime struct {
 	name         string
 	version      string
 	description  string
+	tags         []string
 	capabilities []Capability
 	baseURL      string
 	httpClient   *http.Client
@@ -33,6 +34,8 @@ type LangChainRuntime struct {
 	apiKey string
 	// DefaultModel 是默认模型名（LangChain Agent 可能忽略此字段）
 	defaultModel string
+	// healthPath 是健康检查端点路径（默认 "/health"）
+	healthPath string
 }
 
 // LangChainConfig 是 LangChainRuntime 的配置。
@@ -40,11 +43,14 @@ type LangChainConfig struct {
 	Name         string
 	Version      string
 	Description  string
+	Tags         []string
 	Capabilities []Capability
 	BaseURL      string // e.g. "http://langchain-agent:8000"
 	APIKey       string
 	DefaultModel string
 	Timeout      time.Duration
+	// HealthPath 健康检查路径，默认 "/health"（LangServe 标准路径）
+	HealthPath string
 }
 
 // NewLangChainRuntime 创建一个 LangChain 适配器。
@@ -69,25 +75,73 @@ func NewLangChainRuntime(cfg LangChainConfig) *LangChainRuntime {
 	if desc == "" {
 		desc = "LangChain Agent (via LangServe HTTP)"
 	}
+	tags := cfg.Tags
+	if tags == nil {
+		tags = []string{"remote", "langchain"}
+	}
+	hp := cfg.HealthPath
+	if hp == "" {
+		hp = "/health"
+	}
 	return &LangChainRuntime{
 		name:         name,
 		version:      version,
 		description:  desc,
+		tags:         tags,
 		capabilities: caps,
 		baseURL:      trimSlash(cfg.BaseURL),
 		apiKey:       cfg.APIKey,
 		defaultModel: cfg.DefaultModel,
 		httpClient:   &http.Client{Timeout: timeout},
+		healthPath:   hp,
 	}
 }
 
 func (r *LangChainRuntime) Name() string         { return r.name }
 func (r *LangChainRuntime) Version() string      { return r.version }
 func (r *LangChainRuntime) Description() string  { return r.description }
+func (r *LangChainRuntime) Tags() []string {
+	out := make([]string, len(r.tags))
+	copy(out, r.tags)
+	return out
+}
+// Endpoint 返回远程 Runtime 的端点 URL。
+func (r *LangChainRuntime) Endpoint() string { return r.baseURL }
 func (r *LangChainRuntime) Capabilities() []Capability {
 	out := make([]Capability, len(r.capabilities))
 	copy(out, r.capabilities)
 	return out
+}
+
+// HealthCheck 通过 HTTP 请求检查 LangServe 服务是否可用。
+//
+// 请求 GET {baseURL}/health，返回 2xx 即认为健康。
+// 超时设为 5 秒（健康检查应该快），避免调度器卡住。
+func (r *LangChainRuntime) HealthCheck(ctx context.Context) error {
+	if r.baseURL == "" {
+		return fmt.Errorf("langchain runtime: base_url not configured")
+	}
+	healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(healthCtx, "GET", r.baseURL+r.healthPath, nil)
+	if err != nil {
+		return fmt.Errorf("health check: %w", err)
+	}
+	if r.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+r.apiKey)
+	}
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("health check: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("health check: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // langChainInvokeRequest 是 LangServe /invoke 的请求体。
