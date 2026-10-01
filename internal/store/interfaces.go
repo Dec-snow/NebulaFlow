@@ -90,6 +90,16 @@ type ProviderStore interface {
 	UpsertModel(ctx context.Context, m *model.LLMModel) error
 }
 
+// AgentStore Agent 注册中心仓储。
+type AgentStore interface {
+	CreateAgent(ctx context.Context, a *model.AgentRegistry) error
+	GetAgentByID(ctx context.Context, id int64) (*model.AgentRegistry, error)
+	GetAgentByName(ctx context.Context, userID int64, name string) (*model.AgentRegistry, error)
+	ListAgents(ctx context.Context, userID int64, runtimeType model.AgentRuntimeType, capability string) ([]model.AgentRegistry, error)
+	UpdateAgent(ctx context.Context, a *model.AgentRegistry) error
+	DeleteAgent(ctx context.Context, id int64) error
+}
+
 // 编译期断言：PostgreSQL 实现必须满足对应接口。
 // 这样一旦实现与接口漂移，编译立刻失败，而不是等运行时。
 var (
@@ -98,4 +108,5 @@ var (
 	_ TaskStore      = (*TaskRepo)(nil)
 	_ KnowledgeStore = (*KnowledgeRepo)(nil)
 	_ ProviderStore  = (*ProviderRepo)(nil)
+	_ AgentStore     = (*AgentRepo)(nil)
 )

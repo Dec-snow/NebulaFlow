@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hoarfrost/nebulaflow/internal/agent"
 	"github.com/hoarfrost/nebulaflow/internal/llm"
 	"github.com/hoarfrost/nebulaflow/internal/model"
 	"github.com/hoarfrost/nebulaflow/internal/observability"
@@ -76,6 +77,9 @@ type Scheduler struct {
 	hub       *task.Hub
 	logger    *slog.Logger
 	metrics   *observability.Metrics
+	// agentRegistry 是 Agent 注册中心（可为 nil，表示未启用）。
+	// Supervisor 节点和 Agent 节点通过它查找和实例化 Agent Runtime。
+	agentRegistry *agent.Registry
 	// tracing 提供进程内 span 存储（用于 task → trace 反查与归属校验）。
 	// 为 nil 时一切退化为空操作；span 本身的创建走包级函数，不依赖这个字段。
 	tracing *tracing.Provider

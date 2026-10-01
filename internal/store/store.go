@@ -15,7 +15,7 @@ import (
 	"github.com/hoarfrost/nebulaflow/internal/model"
 )
 
-// Store 聚合 5 个仓储。字段是接口类型，因此 postgres 与 memory 后端可互换。
+// Store 聚合各仓储。字段是接口类型，因此 postgres 与 memory 后端可互换。
 type Store struct {
 	// db 仅在 postgres 模式下非 nil；memory 模式下为 nil。
 	db *database.DB
@@ -25,6 +25,7 @@ type Store struct {
 	Tasks     TaskStore
 	Knowledge KnowledgeStore
 	Providers ProviderStore
+	Agents    AgentStore
 }
 
 // New 构造基于 PostgreSQL 的 Store。
@@ -36,6 +37,7 @@ func New(db *database.DB) *Store {
 		Tasks:     &TaskRepo{db: db},
 		Knowledge: &KnowledgeRepo{db: db},
 		Providers: &ProviderRepo{db: db},
+		Agents:    NewAgentRepo(db),
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/hoarfrost/nebulaflow/internal/agent"
 	"github.com/hoarfrost/nebulaflow/internal/llm"
 	"github.com/hoarfrost/nebulaflow/internal/model"
 	"github.com/hoarfrost/nebulaflow/internal/observability/tracing"
@@ -49,6 +50,8 @@ func (s *Scheduler) ExecuteNode(ctx context.Context, j worker.NodeJob) (worker.N
 		res, err = s.runToolNode(ctx, j)
 	case model.NodeApproval:
 		res, err = s.runApprovalNode(ctx, j)
+	case model.NodeSupervisor:
+		res, err = s.runSupervisorNode(ctx, j)
 	case model.NodeOutput:
 		res = worker.NodeResult{Output: j.Input}
 	default:
@@ -280,6 +283,21 @@ func buildLLMMessages(system, prompt, input string) []llm.Message {
 	}
 	msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: user})
 	return msgs
+}
+
+// buildSupervisorPrompt 构造 Supervisor 节点的用户提示词（与 buildLLMMessages 逻辑一致，但只返回字符串）。
+func buildSupervisorPrompt(prompt, input string) string {
+	user := input
+	if prompt != "" {
+		user = prompt
+		if input != "" {
+			user = prompt + "\n\n用户输入：\n" + input
+		}
+	}
+	if user == "" {
+		user = "请根据你的能力作答。"
+	}
+	return user
 }
 
 // noteFallback 在 LLM 失败时向前端推送"切换备用模型"提示。
@@ -553,4 +571,81 @@ func (s *Scheduler) runApprovalNode(ctx context.Context, j worker.NodeJob) (work
 
 	// 返回哨兵错误，让调度器知道"这是等待，不是失败"
 	return worker.NodeResult{Output: content}, errApprovalWaiting
+}
+
+// ---------- Supervisor 节点（Multi-Agent 协作） ----------
+
+// runSupervisorNode 执行 Multi-Agent 协作主管节点。
+//
+// 工作流程：
+//   1. Supervisor LLM 把大任务拆解成多个子任务
+//   2. 为每个子任务分配专门的 Agent（从注册中心查找，或用默认 Agent）
+//   3. 并发执行所有子任务
+//   4. Supervisor LLM 汇总结果，给出最终回答
+//
+// 为什么 Supervisor 节点比单个 Agent 节点强：
+//   - 并行执行：多个子任务同时跑，总耗时 ≈ 最慢的那个
+//   - 专业分工：不同子任务用不同专长的 Agent
+//   - 质量更高：Supervisor 相当于"项目经理 + 质检员"，汇总时发现并修正问题
+func (s *Scheduler) runSupervisorNode(ctx context.Context, j worker.NodeJob) (worker.NodeResult, error) {
+	cfg := j.Config
+
+	// 主管 Agent 用 NativeRuntime（基于 LLM Gateway + 工具注册中心）
+	supervisorRuntime := agent.NewNativeRuntime(agent.NativeConfig{
+		Name:         "supervisor",
+		Description:  "Multi-Agent 协作主管",
+		Provider:     s.llm,
+		Tools:        s.tools,
+		DefaultModel: cfg.Model,
+	})
+
+	// 最大子任务数
+	maxSubTasks := 3
+	if v, ok := cfg.Extra["max_subtasks"].(float64); ok && v > 0 {
+		maxSubTasks = int(v)
+	}
+
+	// 构建 SupervisorAgent
+	supervisor := agent.NewSupervisorAgent(agent.SupervisorConfig{
+		Supervisor:  supervisorRuntime,
+		Registry:    s.agentRegistry,
+		UserID:      0, // TODO: 从任务里取 user_id
+		MaxSubTasks: maxSubTasks,
+	})
+
+	modelName := cfg.Model
+	if modelName == "" {
+		modelName = "deepseek-chat"
+	}
+
+	result, err := supervisor.Execute(ctx, agent.Input{
+		Prompt:    buildSupervisorPrompt(cfg.Prompt, j.Input),
+		System:    cfg.System,
+		MaxRounds: 5,
+		Model:     modelName,
+		Metadata:  map[string]string{"task_id": fmt.Sprint(j.TaskID), "node_key": j.NodeKey},
+	})
+	if err != nil {
+		return worker.NodeResult{}, fmt.Errorf("supervisor node: %w", err)
+	}
+
+	// 把子任务调用记录推到前端（通过 token 事件的方式简单展示）
+	var detail strings.Builder
+	detail.WriteString("\n\n--- Multi-Agent 协作详情 ---\n")
+	for _, tc := range result.ToolCalls {
+		status := "✅"
+		if tc.Error != "" {
+			status = "❌"
+		}
+		fmt.Fprintf(&detail, "\n%s **%s** (%s) - %v\n", status, tc.Name, tc.Args, tc.Duration)
+	}
+	s.pushTokenEvent(j, detail.String())
+
+	return worker.NodeResult{
+		Output:       result.Output,
+		Provider:     result.Provider,
+		Model:        result.Model,
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+	}, nil
 }

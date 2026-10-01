@@ -58,6 +58,9 @@ func NewGateway(providers []Provider, logger *slog.Logger, attemptTimeout time.D
 // Providers 返回当前可用 Provider 列表（调试/前端展示）。
 func (g *Gateway) Providers() []Provider { return g.providers }
 
+// Name 实现 Provider 接口，让 Gateway 可以直接作为 Provider 使用。
+func (g *Gateway) Name() string { return "gateway" }
+
 // Chat 带故障转移：依次尝试每个 provider，全部失败返回聚合错误。
 func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	if len(g.providers) == 0 {

@@ -6,11 +6,36 @@
 //
 // 设计目标：让工作流引擎可以编排任意 Agent Runtime，
 // 而不是"只能跑自己的 Agent"。这也是企业级平台与 Demo 的核心区别。
+//
+// 未来扩展方向：
+//   - Agent Registry（注册中心）：按能力发现 Agent
+//   - Agent Marketplace：第三方 Agent 接入
+//   - 动态 Agent 选择：根据任务自动匹配合适的 Agent
 package agent
 
 import (
 	"context"
 	"time"
+)
+
+// Capability 表示 Agent 具备的能力，用于注册中心的能力发现与匹配。
+type Capability string
+
+const (
+	// CapToolCall 支持工具调用（function calling）
+	CapToolCall Capability = "tool_call"
+	// CapRAG 支持知识库检索增强
+	CapRAG Capability = "rag"
+	// CapMemory 支持长期记忆 / 会话记忆
+	CapMemory Capability = "memory"
+	// CapStreaming 支持流式输出
+	CapStreaming Capability = "streaming"
+	// CapCode 代码生成与执行能力
+	CapCode Capability = "code"
+	// CapSearch 联网搜索能力
+	CapSearch Capability = "search"
+	// CapMultimodal 多模态（图文理解）
+	CapMultimodal Capability = "multimodal"
 )
 
 // Input 是 Agent 执行的统一输入。
@@ -63,9 +88,20 @@ type ToolCallRecord struct {
 //   - NativeRuntime：NebulaFlow 自研的 function calling Agent
 //   - LangChainRuntime：调用外部 LangChain / LangServe 服务
 //   - 未来可以扩展 OpenAI Assistant、AutoGPT 等
+//
+// 元数据（Name/Version/Capabilities）的作用：
+//  1. Agent Registry 注册中心：按能力检索 Agent
+//  2. 前端展示：用户能看到每个 Agent 支持什么
+//  3. 动态路由：根据任务需求自动选择最合适的 Agent
 type Runtime interface {
-	// Name 返回 runtime 名称，用于日志和审计。
+	// Name 返回 runtime 唯一标识，用于注册与发现。
 	Name() string
+	// Version 返回语义化版本号，用于灰度发布与版本管理。
+	Version() string
+	// Capabilities 返回 Agent 具备的能力列表。
+	Capabilities() []Capability
+	// Description 返回 Agent 的人类可读描述。
+	Description() string
 	// Execute 同步执行一次 Agent 推理，返回最终结果。
 	Execute(ctx context.Context, input Input) (Result, error)
 }

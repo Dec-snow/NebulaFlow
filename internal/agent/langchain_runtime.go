@@ -23,9 +23,12 @@ import (
 //     这个适配器让它们可以无缝接入 NebulaFlow 的工作流编排
 //  3. 架构意义：证明平台不是"只能跑自己的 Agent"，而是开放的 Runtime
 type LangChainRuntime struct {
-	name       string
-	baseURL    string
-	httpClient *http.Client
+	name         string
+	version      string
+	description  string
+	capabilities []Capability
+	baseURL      string
+	httpClient   *http.Client
 	// APIKey 是可选的鉴权密钥（LangServe 可配置）
 	apiKey string
 	// DefaultModel 是默认模型名（LangChain Agent 可能忽略此字段）
@@ -35,6 +38,9 @@ type LangChainRuntime struct {
 // LangChainConfig 是 LangChainRuntime 的配置。
 type LangChainConfig struct {
 	Name         string
+	Version      string
+	Description  string
+	Capabilities []Capability
 	BaseURL      string // e.g. "http://langchain-agent:8000"
 	APIKey       string
 	DefaultModel string
@@ -51,8 +57,23 @@ func NewLangChainRuntime(cfg LangChainConfig) *LangChainRuntime {
 	if name == "" {
 		name = "langchain"
 	}
+	version := cfg.Version
+	if version == "" {
+		version = "1.0.0"
+	}
+	caps := cfg.Capabilities
+	if caps == nil {
+		caps = []Capability{CapToolCall, CapRAG} // LangChain Agent 默认至少支持工具调用
+	}
+	desc := cfg.Description
+	if desc == "" {
+		desc = "LangChain Agent (via LangServe HTTP)"
+	}
 	return &LangChainRuntime{
 		name:         name,
+		version:      version,
+		description:  desc,
+		capabilities: caps,
 		baseURL:      trimSlash(cfg.BaseURL),
 		apiKey:       cfg.APIKey,
 		defaultModel: cfg.DefaultModel,
@@ -60,7 +81,14 @@ func NewLangChainRuntime(cfg LangChainConfig) *LangChainRuntime {
 	}
 }
 
-func (r *LangChainRuntime) Name() string { return r.name }
+func (r *LangChainRuntime) Name() string         { return r.name }
+func (r *LangChainRuntime) Version() string      { return r.version }
+func (r *LangChainRuntime) Description() string  { return r.description }
+func (r *LangChainRuntime) Capabilities() []Capability {
+	out := make([]Capability, len(r.capabilities))
+	copy(out, r.capabilities)
+	return out
+}
 
 // langChainInvokeRequest 是 LangServe /invoke 的请求体。
 type langChainInvokeRequest struct {

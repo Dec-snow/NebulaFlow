@@ -48,7 +48,7 @@ var (
 func ValidateNodeType(t model.NodeType) bool {
 	switch t {
 	case model.NodeInput, model.NodeLLM, model.NodeRAG, model.NodeTool,
-		model.NodeCondition, model.NodeApproval, model.NodeOutput:
+		model.NodeCondition, model.NodeApproval, model.NodeSupervisor, model.NodeOutput:
 		return true
 	default:
 		return false

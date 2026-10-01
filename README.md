@@ -2,7 +2,7 @@
 
 # NebulaFlow
 
-### AI Agent 工作流编排与高并发任务执行平台
+### 企业级 AI Agent Workflow Runtime —— 多 Agent 协作 · RAG 知识增强 · 可靠任务执行
 
 [![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
@@ -20,8 +20,8 @@
 
 ---
 
-NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模型"，而是**自己实现了一套可讲 30 分钟的 Workflow Engine**。
-用可视化拖拽编排 AI 工作流，系统自动调度、并发执行、容错兜底、实时监控。
+NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模型"，而是**自己实现了一套可讲 30 分钟的 Workflow Engine + Agent Runtime**。
+用可视化拖拽编排 AI 工作流，支持多 Agent 协作、人机协同、RAG 知识增强，系统自动调度、并发执行、容错兜底、实时监控。
 
 ### ✨ 核心特性
 
@@ -32,6 +32,8 @@ NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模�
 | 📨 | **Redis Stream 队列** | Consumer Group + ACK + PEL 崩溃恢复 + 死信队列 + 提交侧背压 |
 | 🔄 | **LLM Gateway** | 多 Provider 抽象 + 自动故障转移 + 流式输出 + 用量统计 |
 | 🤖 | **Agent Runtime 抽象层** | 统一 Runtime 接口，支持自研 Native Agent 与 LangChain Agent 接入 |
+| 📇 | **Agent 注册中心** | 类似 K8s Service Discovery，按能力发现 Agent，动态路由，版本管理 |
+| 👥 | **Multi-Agent 协作** | Supervisor 节点拆解任务、分配子 Agent、并发执行、汇总结果 |
 | 🛠️ | **Agent 工具调用** | LLM 自主决策调工具，多轮推理循环，白名单二次校验 |
 | 📚 | **Agentic RAG** | 知识库检索封装为 Tool，Agent 自主判断是否需要检索（而非每次强制检索） |
 | ✋ | **Human-in-the-loop** | 人工审批节点，任务挂起等待确认，审批通过后从断点恢复继续执行 |

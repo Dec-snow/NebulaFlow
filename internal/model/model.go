@@ -30,6 +30,7 @@ const (
 	NodeTool      NodeType = "tool"
 	NodeCondition NodeType = "condition"
 	NodeApproval  NodeType = "approval"
+	NodeSupervisor NodeType = "supervisor" // Multi-Agent 协作主管节点
 	NodeOutput    NodeType = "output"
 )
 
@@ -244,3 +245,46 @@ type UsageRecord struct {
 	Error        string    `json:"error,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
+
+// ---------- Agent 注册中心 ----------
+
+// AgentRuntimeType 是 Agent Runtime 的类型枚举。
+type AgentRuntimeType string
+
+const (
+	RuntimeNative    AgentRuntimeType = "native"    // NebulaFlow 自研 Agent
+	RuntimeLangChain AgentRuntimeType = "langchain" // LangChain / LangServe 远程 Agent
+	RuntimeHTTP      AgentRuntimeType = "http"      // 通用 HTTP Agent（兼容 OpenAI 格式）
+)
+
+// AgentStatus 是 Agent 的生命周期状态。
+type AgentStatus string
+
+const (
+	AgentActive   AgentStatus = "active"   // 可用
+	AgentInactive AgentStatus = "inactive" // 已下线
+	AgentError    AgentStatus = "error"    // 健康检查失败
+)
+
+// AgentRegistry 表示一个已注册的 Agent。
+//
+// 设计理念类似 Kubernetes Service Discovery：
+// 工作流节点不绑定具体代码，而是通过 agent_id 查找注册中心，
+// 找到合适的 Agent Runtime 后再执行。这样 Agent 可以独立部署、
+// 动态扩容、版本灰度，而不需要改工作流定义。
+type AgentRegistry struct {
+	ID          int64             `json:"id"`
+	UserID      int64             `json:"user_id"`        // 所属用户（0 表示系统内置）
+	Name        string            `json:"name"`           // Agent 名称，如 "research-assistant"
+	Description string            `json:"description"`    // 人类可读描述
+	RuntimeType AgentRuntimeType  `json:"runtime_type"`   // native / langchain / http
+	Endpoint    string            `json:"endpoint"`       // 远程 Agent 的地址（native 类型为空）
+	Model       string            `json:"model"`          // 默认使用的模型
+	Capabilities []string         `json:"capabilities"`   // 能力标签：tool_call, rag, code, search...
+	Status      AgentStatus       `json:"status"`         // active / inactive / error
+	Version     string            `json:"version"`        // 语义化版本，如 "1.2.0"
+	TimeoutSec  int               `json:"timeout_sec"`    // 超时时间（秒）
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+

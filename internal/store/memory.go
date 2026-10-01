@@ -47,6 +47,8 @@ type MemoryStore struct {
 	providers map[int64]*model.LLMProvider
 	provName  map[string]int64
 	models    map[int64][]model.LLMModel
+
+	agents map[int64]*model.AgentRegistry
 }
 
 func newMemoryStore() *MemoryStore {
@@ -66,6 +68,7 @@ func newMemoryStore() *MemoryStore {
 		providers: map[int64]*model.LLMProvider{},
 		provName:  map[string]int64{},
 		models:    map[int64][]model.LLMModel{},
+		agents:    map[int64]*model.AgentRegistry{},
 	}
 	// 内嵌的 *Store 字段使用同一批内存实现，接口类型让上层无感。
 	m.Store = &Store{
@@ -75,6 +78,7 @@ func newMemoryStore() *MemoryStore {
 		Tasks:     &memTaskRepo{m: m},
 		Knowledge: &memKnowledgeRepo{m: m},
 		Providers: &memProviderRepo{m: m},
+		Agents:    &memAgentRepo{m: m},
 	}
 	return m
 }
@@ -110,6 +114,7 @@ func (m *MemoryStore) Reset() {
 	m.providers = map[int64]*model.LLMProvider{}
 	m.provName = map[string]int64{}
 	m.models = map[int64][]model.LLMModel{}
+	m.agents = map[int64]*model.AgentRegistry{}
 }
 
 // ---------- 深拷贝辅助 ----------
