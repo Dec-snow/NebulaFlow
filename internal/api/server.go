@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hoarfrost/nebulaflow/internal/agent"
 	"github.com/hoarfrost/nebulaflow/internal/auth"
 	"github.com/hoarfrost/nebulaflow/internal/llm"
 	"github.com/hoarfrost/nebulaflow/internal/observability"
@@ -23,19 +24,21 @@ import (
 
 // Server 持有 API 层依赖并装配路由。
 type Server struct {
-	store   *store.Store
-	auth    *auth.Service
-	tasks   *task.Service
-	rag     *rag.Service
-	llm     *llm.Gateway
-	embed   *llm.EmbeddingGateway
-	queue   queue.Queue
-	pool    *worker.WorkerPool
-	metrics *observability.Metrics
-	limiter ratelimit.Limiter
-	reg     prometheus.Gatherer
+	store       *store.Store
+	auth        *auth.Service
+	tasks       *task.Service
+	rag         *rag.Service
+	llm         *llm.Gateway
+	embed       *llm.EmbeddingGateway
+	queue       queue.Queue
+	pool        *worker.WorkerPool
+	metrics     *observability.Metrics
+	limiter     ratelimit.Limiter
+	reg         prometheus.Gatherer
 	// tracing 为 nil 或未启用时，trace 中间件与查询接口都退化为"不收集、返回 501"。
 	tracing *tracing.Provider
+	// agentRegistry 是 Agent 注册中心，nil 表示未启用 Agent API。
+	agentRegistry *agent.Registry
 	cfg     Config
 }
 
@@ -51,6 +54,13 @@ func NewServer(
 		embed: embedder, queue: q, pool: pool, metrics: metrics,
 		limiter: limiter, reg: reg, tracing: tp, cfg: resolved,
 	}
+}
+
+// WithAgentRegistry 注入 Agent 注册中心（可选依赖）。
+// 使用 Builder 模式而不是加到构造函数参数里，避免构造函数参数继续膨胀。
+func (s *Server) WithAgentRegistry(ar *agent.Registry) *Server {
+	s.agentRegistry = ar
+	return s
 }
 
 // Config 是 API 层需要的运行参数（由 config.Config 映射而来）。
@@ -195,6 +205,20 @@ func (s *Server) Router() *gin.Engine {
 		// Dashboard
 		api.GET("/dashboard/stats", dashH.stats)
 		api.GET("/dashboard/usage", dashH.usage)
+
+		// Agent Registry（可选：仅当注入了 agentRegistry 时注册）
+		if s.agentRegistry != nil {
+			agentH := &agentHandler{registry: s.agentRegistry}
+			api.GET("/agents", agentH.list)
+			api.POST("/agents", agentH.create)
+			api.GET("/agents/capabilities", agentH.capabilities) // 能力标签列表（前端筛选器用）
+			api.GET("/agents/runtime-types", agentH.runtimeTypes) // Runtime 类型列表
+			api.GET("/agents/discover", agentH.discover) // 按能力发现 Agent
+			api.GET("/agents/:id", agentH.get)
+			api.PUT("/agents/:id", agentH.update)
+			api.DELETE("/agents/:id", agentH.delete)
+			api.GET("/agents/:id/health", agentH.health) // 健康检查
+		}
 	}
 
 	return r

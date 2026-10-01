@@ -20,12 +20,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hoarfrost/nebulaflow/internal/agent"
 	"github.com/hoarfrost/nebulaflow/internal/api"
 	"github.com/hoarfrost/nebulaflow/internal/auth"
 	"github.com/hoarfrost/nebulaflow/internal/cache"
 	"github.com/hoarfrost/nebulaflow/internal/config"
 	"github.com/hoarfrost/nebulaflow/internal/database"
 	"github.com/hoarfrost/nebulaflow/internal/llm"
+	"github.com/hoarfrost/nebulaflow/internal/model"
 	"github.com/hoarfrost/nebulaflow/internal/observability"
 	"github.com/hoarfrost/nebulaflow/internal/observability/tracing"
 	"github.com/hoarfrost/nebulaflow/internal/queue"
@@ -308,13 +310,38 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	sched.SetWorkflowLock(wfLock)
 
 	// ---------- 5. HTTP API ----------
+	// Agent Registry：注册中心 + Runtime 工厂
+	agentReg := agent.NewRegistry(st.Agents)
+	// 注册 Native Runtime 工厂
+	agentReg.RegisterFactory(model.RuntimeNative, func(ctx context.Context, a *model.AgentRegistry) (agent.Runtime, error) {
+		return agent.NewNativeRuntime(agent.NativeConfig{
+			Name:         a.Name,
+			Version:      a.Version,
+			Description:  a.Description,
+			Provider:     gateway,
+			Tools:        toolReg,
+			DefaultModel: a.Model,
+		}), nil
+	})
+	// 注册 LangChain Runtime 工厂
+	agentReg.RegisterFactory(model.RuntimeLangChain, func(ctx context.Context, a *model.AgentRegistry) (agent.Runtime, error) {
+		return agent.NewLangChainRuntime(agent.LangChainConfig{
+			Name:         a.Name,
+			Version:      a.Version,
+			Description:  a.Description,
+			BaseURL:      a.Endpoint,
+			DefaultModel: a.Model,
+			Capabilities: strToCapabilities(a.Capabilities),
+		}), nil
+	})
+
 	server := api.NewServer(st, authSvc, taskSvc, ragSvc, gateway, embedder, q, pool,
 		metrics, limiter, prometheus.DefaultGatherer, tp, &api.Config{
 			CORSOrigins:         cfg.CORSOrigins,
 			RateLimitPerMin:     cfg.RateLimitPerMin,
 			TaskRateLimitPerMin: cfg.TaskRateLimitPerMin,
 			WorkerCount:         cfg.WorkerCount,
-		})
+		}).WithAgentRegistry(agentReg)
 	httpSrv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           server.Router(),
@@ -494,4 +521,14 @@ func verifyEmbedDim(ctx context.Context, g *llm.EmbeddingGateway, want int) erro
 			want, got, want)
 	}
 	return nil
+}
+
+// strToCapabilities 把字符串列表转为 Capability 列表。
+// 用于从 DB 记录（AgentRegistry.Capabilities []string）构造 Runtime 配置。
+func strToCapabilities(caps []string) []agent.Capability {
+	out := make([]agent.Capability, len(caps))
+	for i, c := range caps {
+		out[i] = agent.Capability(c)
+	}
+	return out
 }
