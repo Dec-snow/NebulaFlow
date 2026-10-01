@@ -126,6 +126,10 @@ export interface Provider {
 export interface DashboardStats {
   queue_length: number;
   active_workers: number;
+  total_workers: number;
+  worker_queued: number;
   running_tasks: number;
+  sse_subscribers: number;
+  sse_dropped: number;
   timestamp: string;
 }

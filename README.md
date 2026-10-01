@@ -1,19 +1,42 @@
-# NebulaFlow · Enterprise AI Agent Workflow Platform
+<div align="center">
 
-> **高并发 AI Agent 工作流平台**：基于 Go 构建，支持 DAG 工作流编排、RAG 知识库、多 LLM Provider、异步任务调度与实时执行监控。
+# NebulaFlow
 
-NebulaFlow 是一个偏**系统工程**的项目，核心不是"调用大模型"，而是**自己实现了一套可讲 30 分钟的 Workflow Engine**：
+### AI Agent 工作流编排与高并发任务执行平台
 
-- 基于 DAG 的任务依赖调度，无依赖节点并行执行
-- Worker Pool + 背压的并发控制与优雅退出
-- Redis Stream 任务队列 + Consumer Group + ACK + 崩溃恢复 + DLQ
-- 统一 LLM Gateway（Provider 抽象 + 故障转移 + 流式输出）
-- **Agent 自主工具调用**（function calling：模型自己决定调哪个工具、传什么参数、要不要再来一轮）
-- RAG 知识库（上传 → 分块 → 向量化 → Top-K 检索）
-- SSE 实时推送任务/节点/Token/工具调用状态
-- Prometheus + Grafana 业务级可观测性
-- **全链路 Trace**（W3C traceparent 随队列消息跨进程续接，回答"这个任务慢在哪一步"）
-- Docker Compose 一键启动，GitHub Actions CI/CD
+[![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-336791?style=flat-square&logo=postgresql)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-7+-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE)
+[![CI](https://img.shields.io/badge/CI-GitHub_Actions-2088FF?style=flat-square&logo=github-actions)](.github/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/Test_Coverage-85%25-brightgreen?style=flat-square)](#测试与压测)
+
+**自研 DAG 调度引擎 · 464.9 tasks/s 吞吐 · 全链路可观测**
+
+[快速开始](#五快速开始) · [核心设计](#二核心设计) · [技术栈](#三技术栈) · [API 文档](#六rest-api)
+
+</div>
+
+---
+
+NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模型"，而是**自己实现了一套可讲 30 分钟的 Workflow Engine**。
+用可视化拖拽编排 AI 工作流，系统自动调度、并发执行、容错兜底、实时监控。
+
+### ✨ 核心特性
+
+|  | 特性 | 说明 |
+|:---:|---|---|
+| 🎯 | **DAG 调度引擎** | Kahn 拓扑排序 + 环检测，入度驱动并发调度，同层节点并行执行 |
+| ⚡ | **Worker Pool** | goroutine 池 + channel 背压，优雅关闭，20 worker 达 464.9 tasks/s |
+| 📨 | **Redis Stream 队列** | Consumer Group + ACK + PEL 崩溃恢复 + 死信队列 + 提交侧背压 |
+| 🔄 | **LLM Gateway** | 多 Provider 抽象 + 自动故障转移 + 流式输出 + 用量统计 |
+| 🤖 | **Agent 工具调用** | LLM 自主决策调工具，多轮推理循环，白名单二次校验 |
+| 📚 | **RAG 知识库** | pgvector HNSW 索引下推，多租户迭代扫描，单次检索 2.55ms（提速 824×） |
+| 📡 | **SSE 实时流** | 节点状态 / LLM Token / 工具调用 逐字推送，断线重连补发快照 |
+| 🔍 | **全链路 Trace** | W3C traceparent 跨队列传播，9 类 span，瓶颈定位到具体节点 |
+| 📊 | **可观测性** | Prometheus 20+ 指标 + Grafana 面板 + 连接池 / 队列 / 缓存全链路监控 |
+| 🔒 | **分布式锁** | Redis SET NX EX + Lua 校验，防止同一工作流多实例并发执行 |
 
 ---
 
