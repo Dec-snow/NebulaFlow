@@ -62,6 +62,17 @@ func (f *fakeTaskStore) CountTaskNodes(_ context.Context, taskID int64) (int, er
 	return len(f.nodes[taskID]), nil
 }
 
+func (f *fakeTaskStore) GetTaskNodes(_ context.Context, taskID int64) ([]model.TaskNode, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	list := f.nodes[taskID]
+	out := make([]model.TaskNode, len(list))
+	for i, n := range list {
+		out[i] = *n
+	}
+	return out, nil
+}
+
 func (f *fakeTaskStore) CreateTaskNodes(_ context.Context, taskID int64, nodes []model.WorkflowNode) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

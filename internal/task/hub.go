@@ -16,10 +16,12 @@ type EventType string
 const (
 	EventTaskCreated   EventType = "task_created"
 	EventTaskRunning   EventType = "task_running"
+	EventTaskWaiting   EventType = "task_waiting"
 	EventTaskCompleted EventType = "task_completed"
 	EventTaskFailed    EventType = "task_failed"
 	EventTaskCancelled EventType = "task_cancelled"
 	EventNodeStarted   EventType = "node_started"
+	EventNodeWaiting   EventType = "node_waiting"
 	EventNodeCompleted EventType = "node_completed"
 	EventNodeFailed    EventType = "node_failed"
 	EventNodeSkipped   EventType = "node_skipped"

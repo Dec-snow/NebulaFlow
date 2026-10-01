@@ -29,6 +29,7 @@ const (
 	NodeRAG       NodeType = "rag"
 	NodeTool      NodeType = "tool"
 	NodeCondition NodeType = "condition"
+	NodeApproval  NodeType = "approval"
 	NodeOutput    NodeType = "output"
 )
 
@@ -38,6 +39,7 @@ type TaskStatus string
 const (
 	TaskPending   TaskStatus = "pending"
 	TaskRunning   TaskStatus = "running"
+	TaskWaiting   TaskStatus = "waiting"
 	TaskSucceeded TaskStatus = "succeeded"
 	TaskFailed    TaskStatus = "failed"
 	TaskCancelled TaskStatus = "cancelled"
@@ -120,6 +122,7 @@ type TaskNodeStatus string
 const (
 	NodePending   TaskNodeStatus = "pending"
 	NodeRunning   TaskNodeStatus = "running"
+	NodeWaiting   TaskNodeStatus = "waiting"
 	NodeSucceeded TaskNodeStatus = "succeeded"
 	NodeFailed    TaskNodeStatus = "failed"
 	NodeSkipped   TaskNodeStatus = "skipped"

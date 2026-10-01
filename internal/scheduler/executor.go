@@ -47,6 +47,8 @@ func (s *Scheduler) ExecuteNode(ctx context.Context, j worker.NodeJob) (worker.N
 		res, err = s.runRAGNode(ctx, j)
 	case model.NodeTool:
 		res, err = s.runToolNode(ctx, j)
+	case model.NodeApproval:
+		res, err = s.runApprovalNode(ctx, j)
 	case model.NodeOutput:
 		res = worker.NodeResult{Output: j.Input}
 	default:
@@ -438,6 +440,8 @@ func eventForStatus(status model.TaskNodeStatus) task.EventType {
 		return task.EventNodeSkipped
 	case model.NodeCancelled:
 		return task.EventNodeCancelled
+	case model.NodeWaiting:
+		return task.EventNodeWaiting
 	default:
 		return task.EventLog
 	}
@@ -486,4 +490,67 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(runes[:n]) + "…（已截断）"
+}
+
+// ---------- Approval 节点（Human-in-the-loop） ----------
+//
+// Approval 节点实现 Human-in-the-loop 机制：
+//   - 节点启动后立即进入 waiting 状态，任务挂起
+//   - 管理员通过 API 审批（通过/拒绝）
+//   - 审批通过：节点标记为 succeeded，任务继续往下跑
+//   - 审批拒绝：节点标记为 failed，下游全部跳过
+//
+// 这是企业级 Agent 平台的必备特性：涉及发送邮件、修改数据等
+// 有副作用的操作，不能让 Agent 自己说了算，必须有人工确认环节。
+
+// errApprovalWaiting 是一个哨兵错误：表示节点"不是失败，而是在等人"。
+// 调度器看到这个错误会把任务置为 waiting 而不是 failed。
+var errApprovalWaiting = errors.New("waiting for human approval")
+
+// runApprovalNode 执行审批节点：把节点置为 waiting，任务挂起。
+//
+// 注意：这个函数"返回错误"看起来反直觉——节点正常进入等待状态怎么会返回 error？
+// 因为 ExecuteNode 的契约是"返回 error 表示节点未成功完成"，而 waiting 确实
+// 不是 succeeded。调度器拿到 errApprovalWaiting 后会特殊处理：
+// 把节点标为 waiting、任务标为 waiting，而不是 failed。
+func (s *Scheduler) runApprovalNode(ctx context.Context, j worker.NodeJob) (worker.NodeResult, error) {
+	// 从配置里取审批提示语（展示给审批人看）
+	title := "需要人工确认"
+	if v, ok := j.Config.Extra["approval_title"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			title = s
+		}
+	}
+	desc := ""
+	if v, ok := j.Config.Extra["approval_description"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			desc = s
+		}
+	}
+
+	// 把输入作为"待审批内容"回传（前端展示给审批人）
+	content := j.Input
+	if len(content) > 2000 {
+		content = content[:2000] + "...（已截断）"
+	}
+
+	// 发布等待事件
+	ev := task.NewEvent(task.EventNodeWaiting, j.TaskID)
+	ev.NodeKey = j.NodeKey
+	ev.NodeType = string(j.NodeType)
+	ev.Message = title
+	ev.Content = content
+	if desc != "" {
+		ev.Message += " — " + desc
+	}
+	s.hub.Publish(ev)
+
+	// 记录审批信息到节点 output 字段（前端可以展示审批内容）
+	// 注意：这里不调用 publishNode(succeeded)，因为节点还没完。
+	// 我们直接更新节点状态为 waiting。
+	s.publishNode(ctx, j, model.NodeWaiting, content, "", time.Now(), 0, nil)
+	s.logNode(j, "info", "approval: waiting for human approval — "+title)
+
+	// 返回哨兵错误，让调度器知道"这是等待，不是失败"
+	return worker.NodeResult{Output: content}, errApprovalWaiting
 }

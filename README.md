@@ -31,8 +31,11 @@ NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模�
 | ⚡ | **Worker Pool** | goroutine 池 + channel 背压，优雅关闭，20 worker 达 464.9 tasks/s |
 | 📨 | **Redis Stream 队列** | Consumer Group + ACK + PEL 崩溃恢复 + 死信队列 + 提交侧背压 |
 | 🔄 | **LLM Gateway** | 多 Provider 抽象 + 自动故障转移 + 流式输出 + 用量统计 |
-| 🤖 | **Agent 工具调用** | LLM 自主决策调工具，多轮推理循环，白名单二次校验 |
-| 📚 | **RAG 知识库** | pgvector HNSW 索引下推，多租户迭代扫描，单次检索 2.55ms（提速 824×） |
+| 🤖 | **Agent Runtime 抽象层** | 统一 Runtime 接口，支持自研 Native Agent 与 LangChain Agent 接入 |
+| 🛠️ | **Agent 工具调用** | LLM 自主决策调工具，多轮推理循环，白名单二次校验 |
+| 📚 | **Agentic RAG** | 知识库检索封装为 Tool，Agent 自主判断是否需要检索（而非每次强制检索） |
+| ✋ | **Human-in-the-loop** | 人工审批节点，任务挂起等待确认，审批通过后从断点恢复继续执行 |
+| 📦 | **Checkpoint 机制** | 节点状态持久化，支持任务暂停 / 恢复 / 失败重试，从断点继续而非从头重跑 |
 | 📡 | **SSE 实时流** | 节点状态 / LLM Token / 工具调用 逐字推送，断线重连补发快照 |
 | 🔍 | **全链路 Trace** | W3C traceparent 跨队列传播，9 类 span，瓶颈定位到具体节点 |
 | 📊 | **可观测性** | Prometheus 20+ 指标 + Grafana 面板 + 连接池 / 队列 / 缓存全链路监控 |

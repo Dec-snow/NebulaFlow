@@ -46,6 +46,7 @@ var ErrTaskCancelled = errors.New("task cancelled by user")
 type TaskStore interface {
 	GetTaskByID(ctx context.Context, id int64) (*model.Task, error)
 	CountTaskNodes(ctx context.Context, taskID int64) (int, error)
+	GetTaskNodes(ctx context.Context, taskID int64) ([]model.TaskNode, error)
 	CreateTaskNodes(ctx context.Context, taskID int64, nodes []model.WorkflowNode) error
 	UpdateTaskStatus(ctx context.Context, id int64, status model.TaskStatus, output, errMsg string) error
 	UpdateTaskNode(ctx context.Context, n *model.TaskNode) error
@@ -152,6 +153,82 @@ func (s *Scheduler) Cancel(taskID int64) bool {
 		c()
 	}
 	return true
+}
+
+// ApproveNode 审批一个 waiting 状态的节点。
+//
+// approved=true  → 节点标记为 succeeded，任务重新入队继续执行
+// approved=false → 节点标记为 failed，下游全部跳过（任务最终失败）
+//
+// 这是 Human-in-the-loop 的核心 API：工作流跑到审批节点会挂起，
+// 等人工确认后才继续往下走。适用于发邮件、改数据、下订单等
+// 有副作用、不能让 Agent 自己说了算的场景。
+func (s *Scheduler) ApproveNode(ctx context.Context, taskID int64, nodeKey string, approved bool, comment string) error {
+	t, err := s.tasks.GetTaskByID(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if t.Status != model.TaskWaiting {
+		return fmt.Errorf("task %d is not waiting (status=%s)", taskID, t.Status)
+	}
+
+	// 更新审批节点的状态
+	n := &model.TaskNode{
+		TaskID:   taskID,
+		NodeKey:  nodeKey,
+		Status:   model.NodeSucceeded,
+		Output:   "approved: " + comment,
+		DurationMS: 0,
+	}
+	if !approved {
+		n.Status = model.NodeFailed
+		n.Output = ""
+	}
+	if err := s.tasks.UpdateTaskNode(ctx, n); err != nil {
+		return fmt.Errorf("update approval node: %w", err)
+	}
+
+	// 发布审批事件
+	ev := task.NewEvent(task.EventNodeCompleted, taskID)
+	ev.NodeKey = nodeKey
+	ev.NodeStatus = string(n.Status)
+	ev.Message = "人工审批：" + map[bool]string{true: "通过", false: "拒绝"}[approved]
+	if comment != "" {
+		ev.Message += " — " + comment
+	}
+	s.hub.Publish(ev)
+
+	// 如果拒绝了，把任务置为 failed（下游会被跳过）
+	if !approved {
+		_ = s.tasks.UpdateTaskStatus(ctx, taskID, model.TaskFailed, "",
+			"approval rejected: "+comment)
+		s.hub.Publish(task.NewEvent(task.EventTaskFailed, taskID))
+		return nil
+	}
+
+	// 通过：把任务重新入队，调度器会从当前状态继续执行
+	//
+	// 实现方式：把任务状态改回 running，重新投递到队列头部。
+	// 调度器拿到任务后，会从 task_nodes 里读取已有状态，
+	// 跳过已完成的节点，从未完成的地方继续。
+	//
+	// 注意：这里不做"精确断点恢复"（即从 approval 节点的下一个节点开始），
+	// 而是让调度器重新跑一遍——已完成的节点会被幂等跳过（CreateTaskNodes
+	// 已经有 CountTaskNodes 的幂等保护），只有 waiting 的节点会被"重放"为 succeeded，
+	// 然后继续往下调度。这种方式简单可靠，不用额外维护"断点表"。
+	if err := s.tasks.UpdateTaskStatus(ctx, taskID, model.TaskPending, "", ""); err != nil {
+		return fmt.Errorf("reset task status: %w", err)
+	}
+
+	// 重新投递到队列
+	if err := s.queue.Enqueue(ctx, queue.Job{
+		TaskID: taskID,
+	}); err != nil {
+		return fmt.Errorf("re-enqueue task: %w", err)
+	}
+	s.hub.Publish(task.NewEvent(task.EventTaskRunning, taskID))
+	s.logger.Info("task resumed after approval", "task_id", taskID, "node", nodeKey)
+	return nil
 }
 
 // RunningTasks 返回本机正在执行的任务数（Dashboard 实时指标）。
@@ -637,6 +714,36 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 		}
 	}
 
+	// ---- Checkpoint 恢复：从数据库读取已有节点状态，跳过已完成的 ----
+	//
+	// 审批通过 / 失败重试后，任务会重新入队。此时 task_nodes 里
+	// 已经有了前一次执行留下的状态（succeeded / failed / waiting）。
+	// 我们把已经终态的节点直接标记为 submitted，让调度器从"断点"继续，
+	// 而不是从头再跑一遍（浪费 token + 可能产生副作用）。
+	if existingNodes, err := s.listTaskNodes(runCtx, t.ID); err == nil {
+		for _, tn := range existingNodes {
+			if tn.Status == model.NodeSucceeded {
+				submitted[tn.NodeKey] = true
+				results[tn.NodeKey] = tn.Output
+				remaining--
+				// 后继入度减 1（模拟节点完成）
+				for _, target := range dag.Edges[tn.NodeKey] {
+					inDegree[target]--
+				}
+			} else if tn.Status == model.NodeFailed {
+				submitted[tn.NodeKey] = true
+				remaining--
+				if firstErr == nil {
+					firstErr = fmt.Errorf("node %s failed (resumed)", tn.NodeKey)
+				}
+				skipDownstream(tn.NodeKey, "上游节点 "+tn.NodeKey+" 执行失败")
+			} else if tn.Status == model.NodeSkipped {
+				submitted[tn.NodeKey] = true
+				remaining--
+			}
+		}
+	}
+
 	for remaining > 0 {
 		submitReady()
 		if remaining <= 0 {
@@ -676,6 +783,23 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 	}
 
 	if firstErr != nil {
+		// 审批等待：不是失败，是暂停。任务进入 waiting 状态，
+		// 消息不 ACK（保留在 PEL 中），等审批通过后由 ResumeTask 重新入队。
+		if errors.Is(firstErr, errApprovalWaiting) {
+			span.SetAttributes(tracing.KV("nebulaflow.task.status", string(model.TaskWaiting)))
+			finalCtx, cancelFinal := detached(ctx, 10*time.Second)
+			defer cancelFinal()
+			_ = s.tasks.UpdateTaskStatus(finalCtx, t.ID, model.TaskWaiting, "", "waiting for human approval")
+			s.hub.Publish(task.NewEvent(task.EventTaskWaiting, t.ID))
+			if s.metrics != nil {
+				s.metrics.ObserveTaskDone("waiting", time.Since(start).Seconds(), fmt.Sprint(wfID))
+			}
+			// 不 ACK 也不 Nack：消息留在 PEL 里
+			// （审批通过后由 ResumeTask 重新投递到队首继续执行）
+			finished = true
+			s.logger.Info("task waiting for approval", "task_id", t.ID)
+			return nil
+		}
 		status := model.TaskFailed
 		if errors.Is(firstErr, ErrTaskCancelled) {
 			status = model.TaskCancelled
@@ -779,6 +903,11 @@ func (s *Scheduler) finish(ctx context.Context, t *model.Task, status model.Task
 	if err := s.queue.Nack(ctx, msgID, errMsg, retryLeft); err != nil {
 		s.logger.Warn("nack failed", "task_id", t.ID, "error", err)
 	}
+}
+
+// listTaskNodes 读取任务的全部节点状态（用于 Checkpoint 恢复）。
+func (s *Scheduler) listTaskNodes(ctx context.Context, taskID int64) ([]model.TaskNode, error) {
+	return s.tasks.GetTaskNodes(ctx, taskID)
 }
 
 // failTask 处理任务启动阶段（进入调度主循环前）的致命错误。
