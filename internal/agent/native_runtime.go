@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hoarfrost/nebulaflow/internal/llm"
+	"github.com/hoarfrost/nebulaflow/internal/memory"
 	"github.com/hoarfrost/nebulaflow/internal/tool"
 )
 
@@ -22,12 +23,14 @@ import (
 //  3. 可替换性：换成 LangChain Runtime 不需要改调度器
 //  4. 可注册性：可以被 Agent Registry 发现和管理
 type NativeRuntime struct {
-	name        string
-	version     string
-	description string
-	provider    llm.Provider
-	tools       *tool.Registry
+	name         string
+	version      string
+	description  string
+	provider     llm.Provider
+	tools        *tool.Registry
 	defaultModel string
+	// memory 是可选的记忆管理器；为 nil 表示不启用记忆功能。
+	memory *memory.Manager
 }
 
 // NativeConfig 是 NativeRuntime 的配置。
@@ -38,6 +41,8 @@ type NativeConfig struct {
 	Provider     llm.Provider
 	Tools        *tool.Registry
 	DefaultModel string
+	// Memory 是可选的记忆管理器；为 nil 表示不启用记忆。
+	Memory *memory.Manager
 }
 
 // NewNativeRuntime 创建一个自研 Agent Runtime。
@@ -61,6 +66,7 @@ func NewNativeRuntime(cfg NativeConfig) *NativeRuntime {
 		provider:     cfg.Provider,
 		tools:        cfg.Tools,
 		defaultModel: cfg.DefaultModel,
+		memory:       cfg.Memory,
 	}
 }
 
@@ -68,7 +74,11 @@ func (r *NativeRuntime) Name() string        { return r.name }
 func (r *NativeRuntime) Version() string     { return r.version }
 func (r *NativeRuntime) Description() string { return r.description }
 func (r *NativeRuntime) Capabilities() []Capability {
-	return []Capability{CapToolCall, CapStreaming}
+	caps := []Capability{CapToolCall, CapStreaming}
+	if r.memory != nil {
+		caps = append(caps, CapMemory)
+	}
+	return caps
 }
 
 // Execute 执行一次 Agent 推理，支持多轮工具调用。
@@ -90,11 +100,36 @@ func (r *NativeRuntime) Execute(ctx context.Context, input Input) (Result, error
 		maxRounds = 5
 	}
 
-	// 构造消息
-	messages := make([]llm.Message, 0, 8)
-	if input.System != "" {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: input.System})
+	// ---- 记忆注入（Memory Injection） ----
+	// 1. 长期记忆：检索与当前问题相关的用户偏好/历史知识，注入系统提示词
+	systemPrompt := input.System
+	if r.memory != nil && input.UserID > 0 {
+		enhanced, err := r.memory.BuildSystemPrompt(ctx, input.UserID, input.Prompt, input.System)
+		if err == nil {
+			systemPrompt = enhanced
+		}
 	}
+
+	// 构造消息
+	messages := make([]llm.Message, 0, 16)
+	if systemPrompt != "" {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: systemPrompt})
+	}
+
+	// 2. 短期记忆：加载同一会话的历史消息
+	if r.memory != nil && input.SessionID != "" {
+		history, err := r.memory.GetContext(ctx, input.SessionID)
+		if err == nil && len(history) > 0 {
+			for _, m := range history {
+				messages = append(messages, llm.Message{
+					Role:    llm.Role(m.Role),
+					Content: m.Content,
+				})
+			}
+		}
+	}
+
+	// 本轮用户输入
 	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: input.Prompt})
 
 	// 准备工具描述
@@ -129,7 +164,7 @@ func (r *NativeRuntime) Execute(ctx context.Context, input Input) (Result, error
 
 		// 没有工具调用 → 结束，返回最终回答
 		if len(resp.ToolCalls) == 0 {
-			return Result{
+			result := Result{
 				Output:       resp.Content,
 				Rounds:       round,
 				ToolCalls:    toolCalls,
@@ -138,7 +173,10 @@ func (r *NativeRuntime) Execute(ctx context.Context, input Input) (Result, error
 				Provider:     resp.Provider,
 				Model:        resp.Model,
 				Duration:     time.Since(start),
-			}, nil
+			}
+			// 写入短期记忆（本轮 user + assistant）
+			r.saveToMemory(ctx, input, input.Prompt, resp.Content)
+			return result, nil
 		}
 
 		// 回灌 assistant 消息（带 tool_calls）
@@ -177,14 +215,32 @@ func (r *NativeRuntime) Execute(ctx context.Context, input Input) (Result, error
 			break
 		}
 	}
-	return Result{
+	result := Result{
 		Output:       lastContent,
 		Rounds:       maxRounds,
 		ToolCalls:    toolCalls,
 		InputTokens:  inTokens,
 		OutputTokens: outTokens,
 		Duration:     time.Since(start),
-	}, fmt.Errorf("agent: reached max rounds (%d) without final answer", maxRounds)
+	}
+	r.saveToMemory(ctx, input, input.Prompt, lastContent)
+	return result, fmt.Errorf("agent: reached max rounds (%d) without final answer", maxRounds)
+}
+
+// saveToMemory 把本轮对话写入短期记忆（如果启用了记忆且有 sessionID）。
+func (r *NativeRuntime) saveToMemory(ctx context.Context, input Input, userMsg, assistantMsg string) {
+	if r.memory == nil || input.SessionID == "" {
+		return
+	}
+	// 忽略错误，记忆写入失败不影响主流程
+	_ = r.memory.AppendMessage(ctx, input.SessionID, memory.MemoryMessage{
+		Role:    "user",
+		Content: userMsg,
+	})
+	_ = r.memory.AppendMessage(ctx, input.SessionID, memory.MemoryMessage{
+		Role:    "assistant",
+		Content: assistantMsg,
+	})
 }
 
 // callTool 调用一个已注册的工具。

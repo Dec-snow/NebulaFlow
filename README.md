@@ -35,6 +35,7 @@ NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模�
 | 📇 | **Agent 注册中心** | 类似 K8s Service Discovery，按能力发现 Agent，动态路由，版本管理 |
 | 👥 | **Multi-Agent 协作** | Supervisor 节点拆解任务、分配子 Agent、并发执行、汇总结果 |
 | 🛠️ | **Agent 工具调用** | LLM 自主决策调工具，多轮推理循环，白名单二次校验 |
+| 🧠 | **Agent Memory** | 双层记忆架构：Redis 短期会话记忆 + pgvector 长期语义记忆，自动注入 Prompt |
 | 📚 | **Agentic RAG** | 知识库检索封装为 Tool，Agent 自主判断是否需要检索（而非每次强制检索） |
 | ✋ | **Human-in-the-loop** | 人工审批节点，任务挂起等待确认，审批通过后从断点恢复继续执行 |
 | 📦 | **Checkpoint 机制** | 节点状态持久化，支持任务暂停 / 恢复 / 失败重试，从断点继续而非从头重跑 |

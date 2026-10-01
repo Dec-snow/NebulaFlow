@@ -50,6 +50,12 @@ type Input struct {
 	MaxRounds int
 	// Model 是模型名；空表示使用 runtime 默认模型。
 	Model string
+	// SessionID 是会话 ID，用于短期记忆（同一个会话共享历史消息）。
+	// 为空表示不启用短期记忆。
+	SessionID string
+	// UserID 是用户 ID，用于长期记忆（按用户隔离记忆）。
+	// 为 0 表示不启用长期记忆。
+	UserID int64
 	// Metadata 是透传字段，用于 trace / 日志 / 计费。
 	Metadata map[string]string
 }
