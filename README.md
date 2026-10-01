@@ -34,7 +34,7 @@ NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模�
 | 🤖 | **Agent Runtime 抽象层** | 统一 Runtime 接口，支持自研 Native Agent 与 LangChain Agent 接入 |
 | 📇 | **Agent 注册中心** | 类似 K8s Service Discovery，按能力发现 Agent，动态路由，版本管理 |
 | 👥 | **Multi-Agent 协作** | Supervisor 节点拆解任务、分配子 Agent、并发执行、汇总结果 |
-| 🛠️ | **Agent 工具调用** | LLM 自主决策调工具，多轮推理循环，白名单二次校验 |
+| 🛠️ | **Agent 工具调用** | 内置计算器/HTTP/时间/代码运行，支持 MCP 协议扩展外部工具生态 |
 | 🧠 | **Agent Memory** | 双层记忆架构：Redis 短期会话记忆 + pgvector 长期语义记忆，自动注入 Prompt |
 | 📚 | **Agentic RAG** | Hybrid Search（向量+关键词）+ RRF 融合 + Reranker 重排序，Agent 自主判断是否检索 |
 | ✋ | **Human-in-the-loop** | 人工审批节点，任务挂起等待确认，审批通过后从断点恢复继续执行 |
