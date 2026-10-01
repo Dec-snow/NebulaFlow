@@ -41,6 +41,7 @@ NebulaFlow 是一个偏**系统工程**的项目——核心不是"调用大模�
 | 📦 | **Checkpoint 机制** | 节点状态持久化，支持任务暂停 / 恢复 / 失败重试，从断点继续而非从头重跑 |
 | 📡 | **SSE 实时流** | 节点状态 / LLM Token / 工具调用 逐字推送，断线重连补发快照 |
 | 🔍 | **全链路 Trace** | W3C traceparent 跨队列传播，9 类 span，瓶颈定位到具体节点 |
+| 📈 | **Execution Timeline** | 任务执行时间线 API，节点级耗时/token/工具调用，前端直接渲染 |
 | 📊 | **可观测性** | Prometheus 20+ 指标 + Grafana 面板 + 连接池 / 队列 / 缓存全链路监控 |
 | 🔒 | **分布式锁** | Redis SET NX EX + Lua 校验，防止同一工作流多实例并发执行 |
 

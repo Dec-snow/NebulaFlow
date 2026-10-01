@@ -174,5 +174,18 @@ func (s *Service) GetLogs(ctx context.Context, taskID, userID int64, limit int) 
 	return s.store.Tasks.ListLogs(ctx, taskID, limit)
 }
 
+// GetTimeline 获取任务的执行时间线（前端 Timeline 组件用）。
+//
+// 与 OTel Trace 的区别：
+//   - Trace 是系统级监控，关注性能和错误
+//   - Timeline 是业务级展示，关注"任务干了什么"
+func (s *Service) GetTimeline(ctx context.Context, taskID, userID int64) (*Timeline, error) {
+	// 先校验归属
+	if _, err := s.store.Tasks.GetTask(ctx, taskID, userID); err != nil {
+		return nil, err
+	}
+	return BuildTimeline(ctx, s.store.Tasks, taskID)
+}
+
 // Hub 暴露给 scheduler / API 使用。
 func (s *Service) Hub() *Hub { return s.hub }

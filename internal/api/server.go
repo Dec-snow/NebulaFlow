@@ -169,6 +169,7 @@ func (s *Server) Router() *gin.Engine {
 		api.GET("/tasks/:id", taskH.get)
 		api.POST("/tasks/:id/cancel", taskH.cancel)
 		api.GET("/tasks/:id/logs", taskH.logs)
+		api.GET("/tasks/:id/timeline", taskH.timeline) // 执行时间线
 		api.GET("/tasks/:id/stream", taskH.stream) // SSE
 		// 全链路 trace：按任务查最常用（前端/运维从"哪个任务慢"出发），
 		// 按 trace id 查用于从日志或响应头 X-Trace-Id 反查。

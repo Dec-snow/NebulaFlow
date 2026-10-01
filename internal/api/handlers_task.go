@@ -105,6 +105,27 @@ func (h *taskHandler) logs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"logs": logs})
 }
 
+// GET /api/tasks/:id/timeline —— 执行时间线（前端 Timeline 组件用）
+//
+// 返回结构化的执行时间线数据，包含：
+//   - 任务级：总耗时、token 统计、工具调用次数
+//   - 节点级：每个节点的开始偏移、耗时、状态、token
+//   - 事件级：节点内的工具调用、错误、等待等子事件
+//
+// 与 /api/tasks/:id/trace 的区别：
+//   - trace 是 OTel 系统级 span，用于性能分析和错误定位
+//   - timeline 是业务级执行记录，用于前端展示"任务干了什么"
+func (h *taskHandler) timeline(c *gin.Context) {
+	u := getUser(c)
+	id := mustID(c)
+	tl, err := h.svc.GetTimeline(c.Request.Context(), id, u.ID)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, tl)
+}
+
 // GET /api/tasks/:id/stream —— SSE 实时执行流
 func (h *taskHandler) stream(c *gin.Context) {
 	u := getUser(c)
