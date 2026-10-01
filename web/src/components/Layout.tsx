@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Boxes, Database, Gauge, GitBranch, LayoutDashboard, LogOut, Zap } from "lucide-react";
+import { Boxes, Database, Gauge, GitBranch, LayoutDashboard, LogOut, Zap, Bot } from "lucide-react";
 import { useAuth } from "../store/auth";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/workflows", label: "Workflows", icon: GitBranch },
   { to: "/tasks", label: "Tasks", icon: Zap },
+  { to: "/agents", label: "Agents", icon: Bot },
   { to: "/knowledge", label: "Knowledge", icon: Database },
   { to: "/models", label: "Models", icon: Boxes },
 ];

@@ -89,8 +89,41 @@ export const api = {
   // providers
   listProviders: () => request<{ providers: Provider[] }>("/api/providers"),
 
+  // agents
+  listAgents: (params?: { runtime_type?: string; capability?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.runtime_type) q.set("runtime_type", params.runtime_type);
+    if (params?.capability) q.set("capability", params.capability);
+    return request<{ agents: Agent[]; total: number }>(`/api/agents?${q.toString()}`);
+  },
+  getAgent: (id: number) => request<Agent>(`/api/agents/${id}`),
+  createAgent: (payload: Omit<Agent, "id" | "user_id" | "created_at" | "updated_at">) =>
+    request<Agent>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
+  updateAgent: (id: number, payload: Partial<Agent>) =>
+    request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteAgent: (id: number) =>
+    request<{ ok: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
+  agentHealth: (id: number) => request<AgentHealth>(`/api/agents/${id}/health`),
+  listCapabilities: () =>
+    request<{ capabilities: { value: string; label: string }[] }>("/api/agents/capabilities"),
+  listRuntimeTypes: () =>
+    request<{ runtime_types: { value: string; label: string }[] }>("/api/agents/runtime-types"),
+  discoverAgents: (capability: string) =>
+    request<{ agents: Agent[]; total: number; capability: string }>(
+      `/api/agents/discover?capability=${encodeURIComponent(capability)}`
+    ),
+
   // dashboard
   dashboardStats: () => request<DashboardStats>("/api/dashboard/stats"),
 };
 
-import type { Workflow, Task, KnowledgeBase, Document, Provider, DashboardStats } from "../types";
+import type {
+  Workflow,
+  Task,
+  KnowledgeBase,
+  Document,
+  Provider,
+  Agent,
+  AgentHealth,
+  DashboardStats,
+} from "../types";

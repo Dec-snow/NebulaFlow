@@ -123,6 +123,42 @@ export interface Provider {
   models?: { id: number; name: string; max_tokens: number }[];
 }
 
+// ---------- Agent ----------
+
+export type AgentRuntimeType = "native" | "langchain" | "http";
+export type AgentStatus = "active" | "inactive" | "error";
+
+export interface Agent {
+  id: number;
+  user_id: number;
+  name: string;
+  description: string;
+  runtime_type: AgentRuntimeType;
+  endpoint: string;
+  model: string;
+  capabilities: string[];
+  status: AgentStatus;
+  version: string;
+  timeout_sec: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentHealth {
+  agent_id: number;
+  healthy: boolean;
+  error?: string;
+  metadata?: {
+    name: string;
+    version: string;
+    description: string;
+    capabilities: string[];
+    tags: string[];
+    endpoint: string;
+    healthy: boolean;
+  };
+}
+
 export interface DashboardStats {
   queue_length: number;
   active_workers: number;
