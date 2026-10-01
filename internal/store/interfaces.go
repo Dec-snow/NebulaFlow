@@ -77,6 +77,9 @@ type KnowledgeStore interface {
 	// 注意这里没有"列出全部分块"的方法——这是刻意的。
 	// 原签名 SearchChunks(ctx, kbID) 会把整个知识库拉进进程，见优化任务清单 P0-1。
 	SearchChunks(ctx context.Context, kbID int64, queryVec []float64, k int) ([]model.DocumentChunk, error)
+	// KeywordSearch 在知识库内做关键词全文检索（tsvector / BM25 风格）。
+	// 返回按相关性降序排列的 Top-K 分块，Score 为 0~1 的相关性分数。
+	KeywordSearch(ctx context.Context, kbID int64, query string, k int) ([]model.DocumentChunk, error)
 }
 
 // ProviderStore LLM Provider / Model 仓储。

@@ -249,6 +249,69 @@ func (r *KnowledgeRepo) SearchChunks(ctx context.Context, kbID int64, queryVec [
 	return out, nil
 }
 
+// KeywordSearch 在指定知识库内做关键词全文检索（基于 tsvector）。
+//
+// 使用 PostgreSQL 的全文检索能力：
+//   - plainto_tsquery 把查询转成 AND 关系的 tsquery
+//   - ts_rank 计算相关性分数（BM25 风格）
+//   - GIN 索引加速匹配
+//
+// 为什么用 tsvector 而不是自己实现 BM25：
+//   1. PG 内置，零依赖，开箱即用
+//   2. GIN 索引高效，亿级文档也能跑
+//   3. ts_rank 已经是 BM25 的近似实现
+//
+// Score 归一化到 0~1（除以最高分），便于和向量检索做 RRF 融合。
+func (r *KnowledgeRepo) KeywordSearch(ctx context.Context, kbID int64, query string, k int) ([]model.DocumentChunk, error) {
+	if k <= 0 {
+		k = 5
+	}
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+
+	rows, err := r.db.Pool.Query(ctx, `
+		SELECT dc.id, dc.document_id, dc.content, dc.chunk_index, d.filename,
+		       ts_rank(dc.content_tsv, plainto_tsquery('simple', $2)) AS score
+		FROM document_chunks dc
+		JOIN documents d ON d.id = dc.document_id
+		WHERE dc.knowledge_base_id = $1
+		  AND dc.content_tsv @@ plainto_tsquery('simple', $2)
+		  AND d.indexed = true
+		ORDER BY score DESC
+		LIMIT $3`, kbID, q, k,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("keyword search: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.DocumentChunk
+	var maxScore float64
+	for rows.Next() {
+		var c model.DocumentChunk
+		if err := rows.Scan(&c.ID, &c.DocumentID, &c.Content, &c.ChunkIndex, &c.Filename, &c.Score); err != nil {
+			return nil, err
+		}
+		if c.Score > maxScore {
+			maxScore = c.Score
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 归一化分数到 0~1
+	if maxScore > 0 {
+		for i := range out {
+			out[i].Score = out[i].Score / maxScore
+		}
+	}
+	return out, nil
+}
+
 // KB 归属校验：确认知识库属于该用户。
 func (r *KnowledgeRepo) BelongsToUser(ctx context.Context, kbID, userID int64) (bool, error) {
 	var one int

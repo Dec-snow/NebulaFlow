@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/hoarfrost/nebulaflow/internal/llm"
@@ -226,4 +228,118 @@ func (r *memKnowledgeRepo) SearchChunks(_ context.Context, kbID int64, queryVec 
 		out = out[:k]
 	}
 	return out, nil
+}
+
+// KeywordSearch 内存版关键词检索：基于简单的词频匹配。
+// 对中文用子串匹配，对英文用词匹配，保证和 PG 版 tsvector 的行为大致一致。
+func (r *memKnowledgeRepo) KeywordSearch(_ context.Context, kbID int64, query string, k int) ([]model.DocumentChunk, error) {
+	if k <= 0 {
+		k = 5
+	}
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return nil, nil
+	}
+
+	// 把查询拆成关键词（按空格和标点）
+	keywords := splitKeywords(q)
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	r.m.mu.RLock()
+	defer r.m.mu.RUnlock()
+
+	var docs map[int64]*model.Document
+	var chunks []model.DocumentChunk
+	// 遍历所有文档，找到该知识库下已索引文档的所有分块
+	docIDs := make([]int64, 0, len(r.m.docs))
+	for id := range r.m.docs {
+		docIDs = append(docIDs, id)
+	}
+	sort.Slice(docIDs, func(i, j int) bool { return docIDs[i] < docIDs[j] })
+
+	for _, docID := range docIDs {
+		d := r.m.docs[docID]
+		if d.KnowledgeBaseID != kbID || d.Status != model.DocIndexed {
+			continue
+		}
+		for _, c := range r.m.chunks[docID] {
+			cc := copyChunk(c)
+			cc.Filename = d.Filename
+			chunks = append(chunks, cc)
+			if docs == nil {
+				docs = make(map[int64]*model.Document)
+			}
+			docs[docID] = d
+		}
+	}
+
+	// 计算每个 chunk 的匹配分数（BM25 简化版：匹配的关键词数 + 词频）
+	type scored struct {
+		chunk model.DocumentChunk
+		score float64
+	}
+	var results []scored
+	for _, c := range chunks {
+		content := strings.ToLower(c.Content)
+		score := 0.0
+		for _, kw := range keywords {
+			if kw == "" {
+				continue
+			}
+			// 子串匹配次数
+			count := strings.Count(content, kw)
+			if count > 0 {
+				// BM25 风格：log(1 + count)，避免高频词权重过大
+				score += 1.0 + math.Log10(float64(count)+1)
+			}
+		}
+		if score > 0 {
+			if d, ok := docs[c.DocumentID]; ok {
+				c.Filename = d.Filename
+			}
+			results = append(results, scored{chunk: c, score: score})
+		}
+	}
+
+	// 按分数降序
+	sort.SliceStable(results, func(i, j int) bool { return results[i].score > results[j].score })
+
+	// 归一化到 0~1
+	if len(results) > 0 {
+		maxScore := results[0].score
+		if maxScore > 0 {
+			for i := range results {
+				results[i].chunk.Score = results[i].score / maxScore
+			}
+		}
+	}
+
+	// 截断到 k
+	out := make([]model.DocumentChunk, 0, len(results))
+	for i, r := range results {
+		if i >= k {
+			break
+		}
+		out = append(out, r.chunk)
+	}
+	return out, nil
+}
+
+// splitKeywords 把查询拆成关键词列表（按空格、标点切分）。
+func splitKeywords(query string) []string {
+	// 简单实现：按空白和常见标点切分
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == ',' || r == '.' ||
+			r == '!' || r == '?' || r == ';' || r == ':' || r == '"' || r == '\''
+	})
+	var out []string
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
