@@ -72,6 +72,11 @@ const STATUS: Record<string, StatusMeta> = {
   disabled: { label: "停用", tone: "neutral" },
   degraded: { label: "降级", tone: "amber" },
   unhealthy: { label: "异常", tone: "rose" },
+
+  // Agent
+  active: { label: "运行中", tone: "mint", pulse: true },
+  inactive: { label: "未启用", tone: "neutral" },
+  error: { label: "异常", tone: "rose" },
 };
 
 export function statusMeta(status: string): StatusMeta {

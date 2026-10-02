@@ -24,6 +24,10 @@ type AgentStore interface {
 	UpdateAgent(ctx context.Context, a *model.AgentRegistry) error
 	// DeleteAgent 删除 Agent。
 	DeleteAgent(ctx context.Context, id int64) error
+	// ListMarketplaceAgents 列出系统内置 Agent（user_id=0），用于 Agent 市场。
+	ListMarketplaceAgents(ctx context.Context, runtimeType model.AgentRuntimeType, capability string) ([]model.AgentRegistry, error)
+	// InstallAgent 从系统 Agent 复制到用户注册中心。
+	InstallAgent(ctx context.Context, agentID int64, userID int64) (*model.AgentRegistry, error)
 }
 
 // RuntimeFactory 是根据 Agent 注册记录创建 Runtime 实例的工厂函数。
@@ -159,6 +163,16 @@ func (r *Registry) GetRuntime(ctx context.Context, agentID int64) (Runtime, erro
 // 返回所有具备指定能力的活跃 Agent。
 func (r *Registry) FindByCapability(ctx context.Context, userID int64, capability string) ([]model.AgentRegistry, error) {
 	return r.store.ListAgents(ctx, userID, "", capability)
+}
+
+// ListMarketplace 列出 Agent 市场中的系统内置 Agent。
+func (r *Registry) ListMarketplace(ctx context.Context, runtimeType model.AgentRuntimeType, capability string) ([]model.AgentRegistry, error) {
+	return r.store.ListMarketplaceAgents(ctx, runtimeType, capability)
+}
+
+// InstallAgent 从市场安装一个系统 Agent 到用户的注册中心。
+func (r *Registry) InstallAgent(ctx context.Context, agentID int64, userID int64) (*model.AgentRegistry, error) {
+	return r.store.InstallAgent(ctx, agentID, userID)
 }
 
 // InvalidateCache 清空某个 Agent 的 Runtime 缓存（配置变更后调用）。

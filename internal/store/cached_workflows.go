@@ -180,6 +180,20 @@ func (c *CachedWorkflows) GetWorkflowEdges(ctx context.Context, workflowID int64
 	return c.next.GetWorkflowEdges(ctx, workflowID)
 }
 
+// ---------- 模板相关（透传到下一层，模板访问频率低不需要缓存） ----------
+
+func (c *CachedWorkflows) ListTemplates(ctx context.Context, userID int64, category string) ([]model.Workflow, error) {
+	return c.next.ListTemplates(ctx, userID, category)
+}
+
+func (c *CachedWorkflows) GetTemplate(ctx context.Context, id int64) (*model.Workflow, error) {
+	return c.next.GetTemplate(ctx, id)
+}
+
+func (c *CachedWorkflows) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {
+	return c.next.CreateFromTemplate(ctx, templateID, targetUserID, newName)
+}
+
 // CacheStats 是缓存命中情况快照，用于上报指标。
 // 命中率长期为 0 说明缓存没接上（键不匹配、TTL 太短、或写入一直失败）。
 type CacheStats struct {

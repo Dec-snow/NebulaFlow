@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -340,7 +341,7 @@ func (r *memWorkflowRepo) ListWorkflows(_ context.Context, userID int64) ([]mode
 
 	out := make([]model.Workflow, 0, len(m.workflows))
 	for _, w := range m.workflows {
-		if w.UserID == userID {
+		if w.UserID == userID && !w.IsTemplate {
 			c := copyWorkflow(w)
 			c.Nodes, c.Edges = nil, nil
 			out = append(out, *c)
@@ -354,6 +355,95 @@ func (r *memWorkflowRepo) ListWorkflows(_ context.Context, userID int64) ([]mode
 		return out[i].ID > out[j].ID
 	})
 	return out, nil
+}
+
+// ---------- 模板相关 ----------
+
+func (r *memWorkflowRepo) ListTemplates(_ context.Context, userID int64, category string) ([]model.Workflow, error) {
+	m := r.m
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]model.Workflow, 0)
+	for _, w := range m.workflows {
+		if !w.IsTemplate {
+			continue
+		}
+		// 系统模板（user_id=0）+ 自己的模板可见
+		if w.UserID != 0 && w.UserID != userID {
+			continue
+		}
+		if category != "" && w.Category != category {
+			continue
+		}
+		c := copyWorkflow(w)
+		c.Nodes, c.Edges = nil, nil
+		out = append(out, *c)
+	}
+	// 系统模板优先，然后按创建时间倒序
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UserID != out[j].UserID {
+			return out[i].UserID == 0 // 系统模板在前
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (r *memWorkflowRepo) GetTemplate(_ context.Context, id int64) (*model.Workflow, error) {
+	m := r.m
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	w, ok := m.workflows[id]
+	if !ok || !w.IsTemplate {
+		return nil, ErrWorkflowNotFound
+	}
+	c := copyWorkflow(w)
+	c.Nodes = append([]model.WorkflowNode(nil), m.wfNodes[id]...)
+	c.Edges = append([]model.WorkflowEdge(nil), m.wfEdges[id]...)
+	return c, nil
+}
+
+func (r *memWorkflowRepo) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {
+	tpl, err := r.GetTemplate(ctx, templateID)
+	if err != nil {
+		return nil, fmt.Errorf("template not found: %w", err)
+	}
+	if !tpl.IsTemplate {
+		return nil, fmt.Errorf("workflow %d is not a template", templateID)
+	}
+
+	name := newName
+	if name == "" {
+		name = tpl.Name + " 副本"
+	}
+
+	newWF := &model.Workflow{
+		UserID:      targetUserID,
+		Name:        name,
+		Description: tpl.Description,
+		Status:      model.WorkflowDraft,
+		IsTemplate:  false,
+		Category:    "",
+		Icon:        "",
+		Nodes:       tpl.Nodes,
+		Edges:       tpl.Edges,
+	}
+	// 清空 ID
+	for i := range newWF.Nodes {
+		newWF.Nodes[i].ID = 0
+		newWF.Nodes[i].WorkflowID = 0
+	}
+	for i := range newWF.Edges {
+		newWF.Edges[i].ID = 0
+		newWF.Edges[i].WorkflowID = 0
+	}
+
+	if err := r.CreateWorkflow(ctx, newWF); err != nil {
+		return nil, fmt.Errorf("create workflow from template: %w", err)
+	}
+	return newWF, nil
 }
 
 func (r *memWorkflowRepo) GetWorkflowNodes(_ context.Context, workflowID int64) ([]model.WorkflowNode, error) {

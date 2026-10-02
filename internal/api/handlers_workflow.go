@@ -142,6 +142,76 @@ func (h *workflowHandler) delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 
+// ---------- 模板市场 ----------
+
+// GET /api/templates —— 模板列表（支持按分类过滤）
+func (h *workflowHandler) listTemplates(c *gin.Context) {
+	u := getUser(c)
+	category := c.Query("category")
+	list, err := h.store.Workflows.ListTemplates(c.Request.Context(), u.ID, category)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"templates": list, "total": len(list)})
+}
+
+// GET /api/templates/:id —— 模板详情（含节点/边，用于预览）
+func (h *workflowHandler) getTemplate(c *gin.Context) {
+	id := mustID(c)
+	wf, err := h.store.Workflows.GetTemplate(c.Request.Context(), id)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	// 模板不需要归属检查：系统模板(user_id=0)所有人可见
+	c.JSON(http.StatusOK, wf)
+}
+
+// POST /api/templates/:id/use —— 从模板创建工作流（一键使用）
+// 返回新建的 workflow ID，前端可以跳转到编辑器。
+func (h *workflowHandler) useTemplate(c *gin.Context) {
+	u := getUser(c)
+	id := mustID(c)
+
+	var body struct {
+		Name string `json:"name"`
+	}
+	_ = c.ShouldBindJSON(&body) // name 可选，空则用默认名
+
+	newWF, err := h.store.Workflows.CreateFromTemplate(c.Request.Context(), id, u.ID, body.Name)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"workflow_id": newWF.ID,
+		"name":        newWF.Name,
+		"message":     "已从模板创建工作流",
+	})
+}
+
+// GET /api/templates/categories —— 模板分类列表
+// 返回所有模板的分类（去重），用于前端分类筛选器。
+func (h *workflowHandler) listCategories(c *gin.Context) {
+	u := getUser(c)
+	list, err := h.store.Workflows.ListTemplates(c.Request.Context(), u.ID, "")
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	// 去重
+	seen := make(map[string]bool)
+	var categories []string
+	for _, w := range list {
+		if w.Category != "" && !seen[w.Category] {
+			seen[w.Category] = true
+			categories = append(categories, w.Category)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"categories": categories})
+}
+
 func orDefault(s, def string) string {
 	if s == "" {
 		return def

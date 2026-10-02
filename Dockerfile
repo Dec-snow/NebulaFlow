@@ -19,7 +19,7 @@ RUN go mod download
 
 # Build
 COPY . .
-COPY --from=frontend /web/dist ./web/dist
+COPY --from=frontend /web/dist ./web-next/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/nebula-server ./cmd/server
 
 # ---- Stage 3: Runtime ----
@@ -30,7 +30,7 @@ RUN apk add --no-cache ca-certificates tzdata && \
 
 WORKDIR /app
 COPY --from=builder /out/nebula-server /app/nebula-server
-COPY --from=builder /src/web/dist /app/web/dist
+COPY --from=builder /src/web-next/dist /app/web-next/dist
 
 USER nebula
 

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -99,6 +100,62 @@ func (f *fakeWorkflows) GetWorkflowNodes(context.Context, int64) ([]model.Workfl
 
 func (f *fakeWorkflows) GetWorkflowEdges(context.Context, int64) ([]model.WorkflowEdge, error) {
 	return nil, nil
+}
+
+// ---------- 模板相关（fake 实现） ----------
+
+func (f *fakeWorkflows) ListTemplates(_ context.Context, userID int64, category string) ([]model.Workflow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []model.Workflow
+	for _, wf := range f.workflows {
+		if !wf.IsTemplate {
+			continue
+		}
+		if wf.UserID != 0 && wf.UserID != userID {
+			continue
+		}
+		if category != "" && wf.Category != category {
+			continue
+		}
+		out = append(out, *wf)
+	}
+	return out, nil
+}
+
+func (f *fakeWorkflows) GetTemplate(_ context.Context, id int64) (*model.Workflow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wf, ok := f.workflows[id]
+	if !ok || !wf.IsTemplate {
+		return nil, fmt.Errorf("not found")
+	}
+	c := *wf
+	return &c, nil
+}
+
+func (f *fakeWorkflows) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {
+	tpl, err := f.GetTemplate(ctx, templateID)
+	if err != nil {
+		return nil, err
+	}
+	name := newName
+	if name == "" {
+		name = tpl.Name + " 副本"
+	}
+	newWF := &model.Workflow{
+		UserID:      targetUserID,
+		Name:        name,
+		Description: tpl.Description,
+		Status:      model.WorkflowDraft,
+		IsTemplate:  false,
+		Category:    "",
+		Icon:        "",
+	}
+	if err := f.CreateWorkflow(ctx, newWF); err != nil {
+		return nil, err
+	}
+	return newWF, nil
 }
 
 func newCached(next WorkflowStore, ttl time.Duration) *CachedWorkflows {

@@ -34,6 +34,13 @@ type WorkflowStore interface {
 	ListWorkflows(ctx context.Context, userID int64) ([]model.Workflow, error)
 	GetWorkflowNodes(ctx context.Context, workflowID int64) ([]model.WorkflowNode, error)
 	GetWorkflowEdges(ctx context.Context, workflowID int64) ([]model.WorkflowEdge, error)
+	// 模板相关
+	// ListTemplates 列出所有系统模板 + 用户自己的模板，可按分类过滤。
+	ListTemplates(ctx context.Context, userID int64, category string) ([]model.Workflow, error)
+	// GetTemplate 获取模板详情（系统模板所有人可见）。
+	GetTemplate(ctx context.Context, id int64) (*model.Workflow, error)
+	// CreateFromTemplate 从模板复制一个新工作流到目标用户。
+	CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error)
 }
 
 // TaskStore 任务仓储（任务 / 节点 / 日志 / 用量）。
@@ -103,6 +110,11 @@ type AgentStore interface {
 	ListAgents(ctx context.Context, userID int64, runtimeType model.AgentRuntimeType, capability string) ([]model.AgentRegistry, error)
 	UpdateAgent(ctx context.Context, a *model.AgentRegistry) error
 	DeleteAgent(ctx context.Context, id int64) error
+	// ListMarketplaceAgents 列出系统内置 Agent（user_id=0），用于 Agent 市场。
+	ListMarketplaceAgents(ctx context.Context, runtimeType model.AgentRuntimeType, capability string) ([]model.AgentRegistry, error)
+	// InstallAgent 从系统 Agent 复制一份到指定用户的注册中心（一键安装）。
+	// 如果用户已安装过同名 Agent，则添加后缀避免冲突。
+	InstallAgent(ctx context.Context, agentID int64, userID int64) (*model.AgentRegistry, error)
 }
 
 // 编译期断言：PostgreSQL 实现必须满足对应接口。

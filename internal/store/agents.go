@@ -179,3 +179,101 @@ func (r *AgentRepo) DeleteAgent(ctx context.Context, id int64) error {
 	}
 	return nil
 }
+
+// ListMarketplaceAgents 列出系统内置 Agent（user_id=0），用于 Agent 市场。
+func (r *AgentRepo) ListMarketplaceAgents(ctx context.Context, runtimeType model.AgentRuntimeType, capability string) ([]model.AgentRegistry, error) {
+	var args []any
+	var conds []string
+
+	conds = append(conds, "user_id = 0 AND status = 'active'")
+
+	if runtimeType != "" {
+		conds = append(conds, fmt.Sprintf("runtime_type = $%d", len(args)+1))
+		args = append(args, string(runtimeType))
+	}
+	if capability != "" {
+		conds = append(conds, fmt.Sprintf("$%d = ANY(capabilities)", len(args)+1))
+		args = append(args, capability)
+	}
+
+	query := `
+		SELECT id, user_id, name, description, runtime_type, endpoint, model,
+		       capabilities, status, version, timeout_sec, created_at, updated_at
+		FROM agent_registry
+		WHERE ` + strings.Join(conds, " AND ") + `
+		ORDER BY created_at DESC`
+
+	rows, err := r.db.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list marketplace agents: %w", err)
+	}
+	defer rows.Close()
+
+	var agents []model.AgentRegistry
+	for rows.Next() {
+		var a model.AgentRegistry
+		var caps []string
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Name, &a.Description, (*string)(&a.RuntimeType),
+			&a.Endpoint, &a.Model, &caps, (*string)(&a.Status),
+			&a.Version, &a.TimeoutSec, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		a.Capabilities = caps
+		agents = append(agents, a)
+	}
+	return agents, rows.Err()
+}
+
+// InstallAgent 从系统 Agent 复制一份到指定用户的注册中心。
+// 如果用户已有同名 Agent，会在名称后加数字后缀避免冲突。
+func (r *AgentRepo) InstallAgent(ctx context.Context, agentID int64, userID int64) (*model.AgentRegistry, error) {
+	// 1. 获取源 Agent（必须是系统内置）
+	src, err := r.GetAgentByID(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if src.UserID != 0 {
+		return nil, fmt.Errorf("only system agents can be installed")
+	}
+
+	// 2. 检查用户是否已有同名 Agent，如有则加后缀
+	name := src.Name
+	suffix := 1
+	for {
+		existing, err := r.GetAgentByName(ctx, userID, name)
+		if errors.Is(err, ErrAgentNotFound) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		// 如果已存在且来源就是同一个系统 agent，则返回已存在的
+		// 否则改名重试
+		suffix++
+		name = fmt.Sprintf("%s-%d", src.Name, suffix)
+		if suffix > 100 {
+			return nil, fmt.Errorf("too many copies of this agent")
+		}
+		_ = existing
+	}
+
+	// 3. 创建副本
+	copy := &model.AgentRegistry{
+		UserID:       userID,
+		Name:         name,
+		Description:  src.Description,
+		RuntimeType:  src.RuntimeType,
+		Endpoint:     src.Endpoint,
+		Model:        src.Model,
+		Capabilities: append([]string{}, src.Capabilities...),
+		Status:       model.AgentActive,
+		Version:      src.Version,
+		TimeoutSec:   src.TimeoutSec,
+	}
+
+	if err := r.CreateAgent(ctx, copy); err != nil {
+		return nil, fmt.Errorf("install agent: %w", err)
+	}
+
+	return copy, nil
+}

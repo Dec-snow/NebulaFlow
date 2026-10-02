@@ -1,8 +1,48 @@
+# Git
 .git
-bin
+.gitignore
+.gitattributes
+
+# Go build artifacts
+bin/
+*.exe
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Node / frontend
 web/node_modules
 web/dist
-*.log
+web-next/node_modules
+web-next/dist
+web-next/.next
+
+# Env & secrets
 .env
-.idea
-.vscode
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Benchmark data
+.bench/
+benchmark/results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
+temp/
+*.tmp

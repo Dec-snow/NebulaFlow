@@ -59,10 +59,17 @@ type Workflow struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Status      WorkflowStatus `json:"status"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	Nodes       []WorkflowNode `json:"nodes,omitempty"`
-	Edges       []WorkflowEdge `json:"edges,omitempty"`
+	// IsTemplate 标记为模板：user_id=0 的系统模板所有用户可见，
+	// 普通用户的模板仅自己可见。
+	IsTemplate bool `json:"is_template"`
+	// Category 是模板分类（如 "客服"、"数据分析"、"代码助手"）。
+	Category string `json:"category,omitempty"`
+	// Icon 是模板图标标识（emoji 或 icon key）。
+	Icon string `json:"icon,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Nodes     []WorkflowNode `json:"nodes,omitempty"`
+	Edges     []WorkflowEdge `json:"edges,omitempty"`
 }
 
 // NodeConfig 是节点配置的通用容器（模型/提示词/工具名等）。

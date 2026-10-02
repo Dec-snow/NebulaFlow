@@ -16,8 +16,8 @@ export interface NodeConfig {
 export interface WorkflowNode {
   id?: number;
   workflow_id?: number;
-  key: string;
-  type: NodeType;
+  node_key: string;
+  node_type: NodeType;
   config?: NodeConfig;
   x?: number;
   y?: number;
@@ -27,8 +27,9 @@ export interface WorkflowNode {
 
 export interface WorkflowEdge {
   id?: number;
-  source: string;
-  target: string;
+  workflow_id?: number;
+  source_node: string;
+  target_node: string;
 }
 
 export interface Workflow {
@@ -37,6 +38,9 @@ export interface Workflow {
   name: string;
   description: string;
   status: string;
+  is_template?: boolean;
+  category?: string;
+  icon?: string;
   created_at: string;
   updated_at: string;
   nodes?: WorkflowNode[];

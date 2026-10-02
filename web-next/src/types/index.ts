@@ -203,6 +203,49 @@ export interface ModelPricing {
 }
 
 /* ============================================================
+ *  Agent
+ * ========================================================== */
+
+export type AgentRuntimeType = "native" | "langchain" | "http";
+export type AgentStatus = "active" | "inactive" | "error";
+
+export interface Agent {
+  id: number;
+  user_id: number;
+  name: string;
+  description: string;
+  runtime_type: AgentRuntimeType;
+  endpoint?: string;
+  model?: string;
+  capabilities: string[];
+  status: AgentStatus;
+  version: string;
+  timeout_sec: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentMarketplaceResponse {
+  items: Agent[];
+  installed_names: string[];
+}
+
+/* ============================================================
+ *  工作流模板
+ * ========================================================== */
+
+export interface WorkflowTemplate {
+  id: number;
+  name: string;
+  description: string;
+  category: string;
+  icon?: string;
+  nodes: number;
+  used_count: number;
+  created_at: string;
+}
+
+/* ============================================================
  *  Prompt 模板
  * ========================================================== */
 

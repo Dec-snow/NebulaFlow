@@ -218,6 +218,338 @@ func main() {
 		}
 		fmt.Printf("\nDemo 登录：demo / demo123456\nWorkflow ID: %d\n", detail.ID)
 	}
+
+	// 5. 系统模板（user_id=0，所有用户可见）
+	seedTemplates(ctx, st)
+
+	// 6. 系统 Agent（user_id=0，Agent 市场）
+	seedAgents(ctx, st)
+}
+
+// seedTemplates 初始化系统模板（幂等：按名称检查是否已存在）。
+// 模板 user_id=0 表示系统级，所有用户都能在模板市场看到。
+func seedTemplates(ctx context.Context, st *store.Store) {
+	templates := []struct {
+		name        string
+		description string
+		category    string
+		icon        string
+		build       func() *model.Workflow
+	}{
+		{
+			name:        "智能客服",
+			description: "用户提问 → 知识库检索 → LLM 生成回答 → 输出",
+			category:    "客服",
+			icon:        "💬",
+			build: func() *model.Workflow {
+				return &model.Workflow{
+					UserID: 0, IsTemplate: true, Category: "客服", Icon: "💬",
+					Name: "智能客服", Description: "用户提问 → 知识库检索 → LLM 生成回答 → 输出",
+					Status: model.WorkflowPublished,
+					Nodes: []model.WorkflowNode{
+						{NodeKey: "input", NodeType: model.NodeInput, PositionX: 50, PositionY: 150},
+						{NodeKey: "rag", NodeType: model.NodeRAG, PositionX: 280, PositionY: 150},
+						{NodeKey: "llm", NodeType: model.NodeLLM, PositionX: 510, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是专业的客服助手，请根据知识库内容准确回答用户问题。",
+								Prompt:     "请基于以下知识库内容回答用户问题：\\n\\n{rag_output}\\n\\n用户问题：{input}",
+								MaxRetry:   2,
+								TimeoutSec: 60,
+							}},
+						{NodeKey: "output", NodeType: model.NodeOutput, PositionX: 740, PositionY: 150},
+					},
+					Edges: []model.WorkflowEdge{
+						{SourceNode: "input", TargetNode: "rag"},
+						{SourceNode: "input", TargetNode: "llm"},
+						{SourceNode: "rag", TargetNode: "llm"},
+						{SourceNode: "llm", TargetNode: "output"},
+					},
+				}
+			},
+		},
+		{
+			name:        "代码助手",
+			description: "输入需求 → 代码生成 → 代码审查 → 输出最终代码",
+			category:    "开发",
+			icon:        "💻",
+			build: func() *model.Workflow {
+				return &model.Workflow{
+					UserID: 0, IsTemplate: true, Category: "开发", Icon: "💻",
+					Name: "代码助手", Description: "输入需求 → 代码生成 → 代码审查 → 输出最终代码",
+					Status: model.WorkflowPublished,
+					Nodes: []model.WorkflowNode{
+						{NodeKey: "input", NodeType: model.NodeInput, PositionX: 50, PositionY: 150},
+						{NodeKey: "generator", NodeType: model.NodeLLM, PositionX: 280, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是资深软件工程师，擅长编写高质量代码。",
+								Prompt:     "根据以下需求编写代码：\\n\\n{input}",
+								MaxRetry:   2,
+								TimeoutSec: 120,
+							}},
+						{NodeKey: "reviewer", NodeType: model.NodeLLM, PositionX: 510, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是代码审查专家，关注可读性、性能和安全性。",
+								Prompt:     "审查以下代码，指出问题并给出改进建议：\\n\\n{generator}",
+								MaxRetry:   2,
+								TimeoutSec: 90,
+							}},
+						{NodeKey: "output", NodeType: model.NodeOutput, PositionX: 740, PositionY: 150},
+					},
+					Edges: []model.WorkflowEdge{
+						{SourceNode: "input", TargetNode: "generator"},
+						{SourceNode: "generator", TargetNode: "reviewer"},
+						{SourceNode: "reviewer", TargetNode: "output"},
+					},
+				}
+			},
+		},
+		{
+			name:        "知识问答",
+			description: "基于知识库的 RAG 问答：检索 → 生成 → 引用来源",
+			category:    "知识库",
+			icon:        "📚",
+			build: func() *model.Workflow {
+				return &model.Workflow{
+					UserID: 0, IsTemplate: true, Category: "知识库", Icon: "📚",
+					Name: "知识问答", Description: "基于知识库的 RAG 问答：检索 → 生成 → 引用来源",
+					Status: model.WorkflowPublished,
+					Nodes: []model.WorkflowNode{
+						{NodeKey: "question", NodeType: model.NodeInput, PositionX: 50, PositionY: 150},
+						{NodeKey: "retrieve", NodeType: model.NodeRAG, PositionX: 280, PositionY: 150},
+						{NodeKey: "answer", NodeType: model.NodeLLM, PositionX: 510, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是知识问答助手，请基于参考资料回答问题，并在答案末尾标注引用来源。",
+								Prompt:     "问题：{question}\\n\\n参考资料：\\n{retrieve}\\n\\n请回答：",
+								MaxRetry:   1,
+								TimeoutSec: 60,
+							}},
+						{NodeKey: "output", NodeType: model.NodeOutput, PositionX: 740, PositionY: 150},
+					},
+					Edges: []model.WorkflowEdge{
+						{SourceNode: "question", TargetNode: "retrieve"},
+						{SourceNode: "question", TargetNode: "answer"},
+						{SourceNode: "retrieve", TargetNode: "answer"},
+						{SourceNode: "answer", TargetNode: "output"},
+					},
+				}
+			},
+		},
+		{
+			name:        "数据分析报告",
+			description: "数据输入 → 分析 → 可视化建议 → 生成报告",
+			category:    "数据分析",
+			icon:        "📊",
+			build: func() *model.Workflow {
+				return &model.Workflow{
+					UserID: 0, IsTemplate: true, Category: "数据分析", Icon: "📊",
+					Name: "数据分析报告", Description: "数据输入 → 分析 → 可视化建议 → 生成报告",
+					Status: model.WorkflowPublished,
+					Nodes: []model.WorkflowNode{
+						{NodeKey: "input", NodeType: model.NodeInput, PositionX: 50, PositionY: 150},
+						{NodeKey: "analyze", NodeType: model.NodeLLM, PositionX: 280, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是数据分析师，擅长从数据中发现洞察。",
+								Prompt:     "分析以下数据，找出关键趋势和异常点：\\n\\n{input}",
+								MaxRetry:   2,
+								TimeoutSec: 90,
+							}},
+						{NodeKey: "visualize", NodeType: model.NodeLLM, PositionX: 510, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是数据可视化专家。",
+								Prompt:     "为以下分析结果推荐最合适的图表类型和布局：\\n\\n{analyze}",
+								MaxRetry:   1,
+								TimeoutSec: 60,
+							}},
+						{NodeKey: "report", NodeType: model.NodeLLM, PositionX: 740, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是技术写作者，擅长撰写清晰的分析报告。",
+								Prompt:     "将以下分析和可视化建议整理成一份完整的数据分析报告：\\n\\n分析结果：{analyze}\\n\\n可视化建议：{visualize}",
+								MaxRetry:   1,
+								TimeoutSec: 90,
+							}},
+						{NodeKey: "output", NodeType: model.NodeOutput, PositionX: 970, PositionY: 150},
+					},
+					Edges: []model.WorkflowEdge{
+						{SourceNode: "input", TargetNode: "analyze"},
+						{SourceNode: "analyze", TargetNode: "visualize"},
+						{SourceNode: "analyze", TargetNode: "report"},
+						{SourceNode: "visualize", TargetNode: "report"},
+						{SourceNode: "report", TargetNode: "output"},
+					},
+				}
+			},
+		},
+		{
+			name:        "文案写作",
+			description: "输入主题 → 生成初稿 → 润色优化 → 多版本输出",
+			category:    "内容创作",
+			icon:        "✍️",
+			build: func() *model.Workflow {
+				return &model.Workflow{
+					UserID: 0, IsTemplate: true, Category: "内容创作", Icon: "✍️",
+					Name: "文案写作", Description: "输入主题 → 生成初稿 → 润色优化 → 多版本输出",
+					Status: model.WorkflowPublished,
+					Nodes: []model.WorkflowNode{
+						{NodeKey: "brief", NodeType: model.NodeInput, PositionX: 50, PositionY: 150},
+						{NodeKey: "draft", NodeType: model.NodeLLM, PositionX: 280, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是创意文案写手。",
+								Prompt:     "根据以下需求写一篇文案初稿：\\n\\n{brief}",
+								MaxRetry:   2,
+								TimeoutSec: 90,
+							}},
+						{NodeKey: "polish", NodeType: model.NodeLLM, PositionX: 510, PositionY: 150,
+							Config: model.NodeConfig{
+								Model:      "mock-chat",
+								System:     "你是资深编辑，擅长润色文案。",
+								Prompt:     "润色以下文案，使其更有吸引力：\\n\\n{draft}",
+								MaxRetry:   2,
+								TimeoutSec: 60,
+							}},
+						{NodeKey: "output", NodeType: model.NodeOutput, PositionX: 740, PositionY: 150},
+					},
+					Edges: []model.WorkflowEdge{
+						{SourceNode: "brief", TargetNode: "draft"},
+						{SourceNode: "draft", TargetNode: "polish"},
+						{SourceNode: "polish", TargetNode: "output"},
+					},
+				}
+			},
+		},
+	}
+
+	created := 0
+	skipped := 0
+	for _, t := range templates {
+		// 检查是否已存在（系统模板 user_id=0）
+		existing, _ := st.Workflows.ListTemplates(ctx, 0, "")
+		found := false
+		for _, w := range existing {
+			if w.Name == t.name && w.UserID == 0 {
+				found = true
+				break
+			}
+		}
+		if found {
+			skipped++
+			continue
+		}
+		wf := t.build()
+		if err := st.Workflows.CreateWorkflow(ctx, wf); err != nil {
+			log.Printf("create template %q failed: %v", t.name, err)
+			continue
+		}
+		created++
+		log.Printf("created template %q (category=%q)", t.name, t.category)
+	}
+	log.Printf("templates seeded: %d created, %d skipped (total %d)", created, skipped, len(templates))
+}
+
+// seedAgents 初始化系统 Agent（user_id=0，Agent 市场）。
+// 幂等：按名称检查是否已存在。
+func seedAgents(ctx context.Context, st *store.Store) {
+	agents := []struct {
+		name         string
+		description  string
+		runtimeType  model.AgentRuntimeType
+		model        string
+		capabilities []string
+		version      string
+		timeoutSec   int
+	}{
+		{
+			name:         "通用对话助手",
+			description:  "通用 LLM 对话 Agent，支持多轮对话和流式输出，适合问答、闲聊、创作等场景。",
+			runtimeType:  model.RuntimeNative,
+			model:        "mock-chat",
+			capabilities: []string{"tool_call", "streaming"},
+			version:      "1.0.0",
+			timeoutSec:   60,
+		},
+		{
+			name:         "代码工程师",
+			description:  "专业代码助手 Agent，擅长代码生成、代码审查、Bug 修复和重构建议。支持多种编程语言。",
+			runtimeType:  model.RuntimeNative,
+			model:        "mock-chat",
+			capabilities: []string{"code", "tool_call", "streaming"},
+			version:      "1.0.0",
+			timeoutSec:   90,
+		},
+		{
+			name:         "知识问答专家",
+			description:  "基于 RAG 的知识问答 Agent，能够从知识库中检索相关信息并给出准确回答。",
+			runtimeType:  model.RuntimeNative,
+			model:        "mock-chat",
+			capabilities: []string{"rag", "tool_call", "streaming"},
+			version:      "1.0.0",
+			timeoutSec:   60,
+		},
+		{
+			name:         "数据分析师",
+			description:  "专业数据分析 Agent，支持数据清洗、统计分析、可视化建议和报告生成。",
+			runtimeType:  model.RuntimeNative,
+			model:        "mock-chat",
+			capabilities: []string{"code", "tool_call", "rag", "streaming"},
+			version:      "1.0.0",
+			timeoutSec:   120,
+		},
+		{
+			name:         "内容创作专家",
+			description:  "擅长各类文本创作的 Agent，包括文章写作、营销文案、邮件、社交媒体内容等。",
+			runtimeType:  model.RuntimeNative,
+			model:        "mock-chat",
+			capabilities: []string{"streaming", "rag"},
+			version:      "1.0.0",
+			timeoutSec:   90,
+		},
+		{
+			name:         "翻译官",
+			description:  "专业翻译 Agent，支持中英日韩等多语言互译，翻译准确、自然流畅。",
+			runtimeType:  model.RuntimeNative,
+			model:        "mock-chat",
+			capabilities: []string{"streaming"},
+			version:      "1.0.0",
+			timeoutSec:   60,
+		},
+	}
+
+	created := 0
+	skipped := 0
+	for _, a := range agents {
+		// 检查是否已存在（系统 Agent user_id=0）
+		existing, err := st.Agents.GetAgentByName(ctx, 0, a.name)
+		if err == nil && existing != nil {
+			skipped++
+			continue
+		}
+
+		agent := &model.AgentRegistry{
+			UserID:       0,
+			Name:         a.name,
+			Description:  a.description,
+			RuntimeType:  a.runtimeType,
+			Model:        a.model,
+			Capabilities: a.capabilities,
+			Status:       model.AgentActive,
+			Version:      a.version,
+			TimeoutSec:   a.timeoutSec,
+		}
+		if err := st.Agents.CreateAgent(ctx, agent); err != nil {
+			log.Printf("create system agent %q failed: %v", a.name, err)
+			continue
+		}
+		created++
+		log.Printf("created system agent %q (runtime=%s)", a.name, a.runtimeType)
+	}
+	log.Printf("system agents seeded: %d created, %d skipped (total %d)", created, skipped, len(agents))
 }
 
 // jdContent 是演示用的岗位要求文档，关键词覆盖 Go/DAG/高并发等，

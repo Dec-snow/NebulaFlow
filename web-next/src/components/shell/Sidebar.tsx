@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import {
   Activity,
   BarChart3,
+  Bot,
   Boxes,
   ChevronsLeft,
   ChevronsRight,
@@ -11,6 +12,8 @@ import {
   Globe,
   LayoutDashboard,
   LogOut,
+  Sparkles,
+  Store,
   type LucideIcon,
 } from "lucide-react";
 import { Avatar } from "@/components/ui";
@@ -60,12 +63,20 @@ function buildNavGroups(t: (key: string) => string): NavGroup[] {
       title: t("nav.orchestration"),
       items: [
         { to: "/workflows", label: t("nav.workflows"), icon: GitBranch },
+        { to: "/templates", label: t("nav.templates"), icon: Sparkles },
         { to: "/tasks", label: t("nav.tasks"), icon: Activity, badge: 2, badgeTone: "sky" },
       ],
     },
     {
       title: t("nav.data"),
       items: [{ to: "/knowledge", label: t("nav.knowledge"), icon: Database }],
+    },
+    {
+      title: t("nav.agents"),
+      items: [
+        { to: "/agents", label: t("nav.myAgents"), icon: Bot },
+        { to: "/agents/marketplace", label: t("nav.marketplace"), icon: Store },
+      ],
     },
     {
       title: t("nav.settings"),

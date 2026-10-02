@@ -58,6 +58,20 @@ export const api = {
   deleteWorkflow: (id: number) =>
     request<{ deleted: number }>(`/api/workflows/${id}`, { method: "DELETE" }),
 
+  // templates
+  listTemplates: (category?: string) =>
+    request<{ templates: Workflow[]; total: number }>(
+      `/api/templates${category ? `?category=${encodeURIComponent(category)}` : ""}`
+    ),
+  getTemplate: (id: number) => request<Workflow>(`/api/templates/${id}`),
+  useTemplate: (id: number, name?: string) =>
+    request<{ workflow_id: number; name: string; message: string }>(`/api/templates/${id}/use`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  listTemplateCategories: () =>
+    request<{ categories: string[] }>("/api/templates/categories"),
+
   // tasks
   createTask: (workflowId: number, input: string) =>
     request<Task>("/api/tasks", { method: "POST", body: JSON.stringify({ workflow_id: workflowId, input }) }),
@@ -112,6 +126,21 @@ export const api = {
     request<{ agents: Agent[]; total: number; capability: string }>(
       `/api/agents/discover?capability=${encodeURIComponent(capability)}`
     ),
+
+  // agent marketplace
+  listMarketplaceAgents: (params?: { runtime_type?: string; capability?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.runtime_type) q.set("runtime_type", params.runtime_type);
+    if (params?.capability) q.set("capability", params.capability);
+    return request<{ agents: Agent[]; total: number; installed_names: Record<string, boolean> }>(
+      `/api/agents/marketplace?${q.toString()}`
+    );
+  },
+  getMarketplaceAgent: (id: number) => request<Agent>(`/api/agents/marketplace/${id}`),
+  installAgent: (id: number) =>
+    request<{ agent_id: number; name: string; message: string }>(`/api/agents/marketplace/${id}/install`, {
+      method: "POST",
+    }),
 
   // dashboard
   dashboardStats: () => request<DashboardStats>("/api/dashboard/stats"),

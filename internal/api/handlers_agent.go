@@ -260,3 +260,72 @@ func (h *agentHandler) discover(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"agents": agents, "total": len(agents), "capability": cap})
 }
 
+// ---------- Agent 市场 ----------
+
+// GET /api/agents/marketplace —— Agent 市场列表（系统内置 Agent）
+func (h *agentHandler) marketplaceList(c *gin.Context) {
+	u := getUser(c)
+	rt := model.AgentRuntimeType(c.Query("runtime_type"))
+	cap := c.Query("capability")
+
+	agents, err := h.registry.ListMarketplace(c.Request.Context(), rt, cap)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+
+	// 检查用户是否已安装（用于前端展示"已安装"标记）
+	// 简单实现：查用户自己的 agent 名字列表
+	userAgents, err := h.registry.List(c.Request.Context(), u.ID, "", "")
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	installedNames := make(map[string]bool)
+	for _, a := range userAgents {
+		if a.UserID == u.ID {
+			installedNames[a.Name] = true
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"agents":          agents,
+		"total":           len(agents),
+		"installed_names": installedNames,
+	})
+}
+
+// GET /api/agents/marketplace/:id —— 市场 Agent 详情
+func (h *agentHandler) marketplaceDetail(c *gin.Context) {
+	id := mustID(c)
+
+	a, err := h.registry.Get(c.Request.Context(), id)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	// 市场详情只返回系统内置 Agent
+	if a.UserID != 0 {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "agent not found in marketplace"})
+		return
+	}
+	c.JSON(http.StatusOK, a)
+}
+
+// POST /api/agents/marketplace/:id/install —— 一键安装 Agent 到用户注册中心
+func (h *agentHandler) marketplaceInstall(c *gin.Context) {
+	u := getUser(c)
+	id := mustID(c)
+
+	installed, err := h.registry.InstallAgent(c.Request.Context(), id, u.ID)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"agent_id": installed.ID,
+		"name":     installed.Name,
+		"message":  "Agent 已安装到你的注册中心",
+	})
+}
+

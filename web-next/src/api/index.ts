@@ -23,6 +23,9 @@ import {
   EDITOR_NODES,
   EDITOR_EDGES,
   NODE_SETS,
+  AGENTS,
+  MARKETPLACE_AGENTS,
+  WORKFLOW_TEMPLATES,
   type WorkflowSummary,
   type TaskRow,
   type Provider,
@@ -31,6 +34,8 @@ import {
   type Kpi,
   type EditorNode,
   type TaskNodeRow,
+  type Agent,
+  type WorkflowTemplate,
 } from "@/lib/mock";
 
 /* ============================================================
@@ -173,6 +178,124 @@ async function searchKnowledge(
   return delay(RETRIEVE_HITS, 400);
 }
 
+/* ------------------------------------------------ Agents */
+
+export interface AgentListParams extends PaginationParams {
+  runtime_type?: string;
+  q?: string;
+}
+
+export interface AgentMarketplaceResponse {
+  items: Agent[];
+  installed_names: string[];
+}
+
+async function listAgents(
+  params: AgentListParams = {},
+): Promise<ListResponse<Agent>> {
+  const { runtime_type, q, page = 1, pageSize = 20 } = params;
+  let list = AGENTS.filter(
+    (a) =>
+      (!runtime_type || a.runtime_type === runtime_type) &&
+      (!q ||
+        a.name.toLowerCase().includes(q.toLowerCase()) ||
+        a.description.toLowerCase().includes(q.toLowerCase())),
+  );
+  const total = list.length;
+  const start = (page - 1) * pageSize;
+  list = list.slice(start, start + pageSize);
+  return delay({ items: list, total, page, pageSize });
+}
+
+async function listMarketplaceAgents(
+  params: AgentListParams = {},
+): Promise<AgentMarketplaceResponse> {
+  const { runtime_type, q } = params;
+  const installed_names = AGENTS.map((a) => a.name);
+  let items = MARKETPLACE_AGENTS.filter(
+    (a) =>
+      (!runtime_type || a.runtime_type === runtime_type) &&
+      (!q ||
+        a.name.toLowerCase().includes(q.toLowerCase()) ||
+        a.description.toLowerCase().includes(q.toLowerCase()) ||
+        a.capabilities.some((c) => c.toLowerCase().includes(q.toLowerCase()))),
+  );
+  return delay({ items, installed_names });
+}
+
+async function installAgent(id: number): Promise<{ success: boolean }> {
+  console.log("[api] install agent", id);
+  return delay({ success: true }, 500);
+}
+
+async function deleteAgent(id: number): Promise<{ success: boolean }> {
+  console.log("[api] delete agent", id);
+  return delay({ success: true }, 400);
+}
+
+async function createAgent(payload: Partial<Agent>): Promise<Agent> {
+  console.log("[api] create agent", payload);
+  const newAgent: Agent = {
+    id: AGENTS.length + 100,
+    user_id: 1,
+    name: payload.name ?? "New Agent",
+    description: payload.description ?? "",
+    runtime_type: (payload.runtime_type as Agent["runtime_type"]) ?? "native",
+    endpoint: payload.endpoint,
+    model: payload.model,
+    capabilities: payload.capabilities ?? [],
+    status: "active",
+    version: payload.version ?? "0.1.0",
+    timeout_sec: payload.timeout_sec ?? 60,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  return delay(newAgent, 500);
+}
+
+/* ------------------------------------------------ Templates */
+
+export interface TemplateListParams extends PaginationParams {
+  category?: string;
+  q?: string;
+}
+
+async function listTemplates(
+  params: TemplateListParams = {},
+): Promise<ListResponse<WorkflowTemplate>> {
+  const { category, q, page = 1, pageSize = 20 } = params;
+  let list = WORKFLOW_TEMPLATES.filter(
+    (t) =>
+      (!category || category === "all" || t.category === category) &&
+      (!q ||
+        t.name.toLowerCase().includes(q.toLowerCase()) ||
+        t.description.toLowerCase().includes(q.toLowerCase())),
+  );
+  const total = list.length;
+  const start = (page - 1) * pageSize;
+  list = list.slice(start, start + pageSize);
+  return delay({ items: list, total, page, pageSize });
+}
+
+async function listTemplateCategories(): Promise<{ name: string; count: number }[]> {
+  const counts = new Map<string, number>();
+  WORKFLOW_TEMPLATES.forEach((t) => {
+    counts.set(t.category, (counts.get(t.category) ?? 0) + 1);
+  });
+  const categories = [
+    { name: "全部", count: WORKFLOW_TEMPLATES.length },
+    ...Array.from(counts.entries()).map(([name, count]) => ({ name, count })),
+  ];
+  return delay(categories);
+}
+
+async function useTemplate(id: number): Promise<{ workflowId: number }> {
+  console.log("[api] use template", id);
+  // 模拟创建新工作流，返回一个新的 workflow id
+  const newId = Math.floor(Math.random() * 1000) + 100;
+  return delay({ workflowId: newId }, 500);
+}
+
 /* ============================================================
  * 导出 API 服务
  * ========================================================== */
@@ -183,4 +306,16 @@ export const api = {
   tasks: { list: listTasks, get: getTask },
   providers: { list: listProviders },
   knowledge: { list: listKnowledgeBases, search: searchKnowledge },
+  agents: {
+    list: listAgents,
+    marketplace: listMarketplaceAgents,
+    install: installAgent,
+    delete: deleteAgent,
+    create: createAgent,
+  },
+  templates: {
+    list: listTemplates,
+    categories: listTemplateCategories,
+    use: useTemplate,
+  },
 };

@@ -10,6 +10,8 @@ import Knowledge from "./pages/Knowledge";
 import Models from "./pages/Models";
 import Tasks from "./pages/Tasks";
 import Agents from "./pages/Agents";
+import AgentMarketplace from "./pages/AgentMarketplace";
+import Templates from "./pages/Templates";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = useAuth((s) => s.token);
@@ -34,7 +36,9 @@ export default function App() {
         <Route path="workflows/:id" element={<WorkflowEditor />} />
         <Route path="tasks" element={<Tasks />} />
         <Route path="tasks/:id" element={<TaskDetail />} />
+        <Route path="templates" element={<Templates />} />
         <Route path="agents" element={<Agents />} />
+        <Route path="agents/marketplace" element={<AgentMarketplace />} />
         <Route path="knowledge" element={<Knowledge />} />
         <Route path="models" element={<Models />} />
       </Route>

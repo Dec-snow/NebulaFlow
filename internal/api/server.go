@@ -116,7 +116,7 @@ func (s *Server) Router() *gin.Engine {
 		r.GET("/metrics", gin.WrapH(h))
 	}
 
-	// 前端静态资源：web/dist 存在时由后端直接托管（单端口一站式访问）
+	// 前端静态资源：web-next/dist 存在时由后端直接托管（单端口一站式访问）
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
@@ -126,7 +126,7 @@ func (s *Server) Router() *gin.Engine {
 			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
-		dist := "web/dist"
+		dist := "web-next/dist"
 		file := path.Join(dist, c.Request.URL.Path)
 		if !strings.HasPrefix(file, dist) {
 			// 路径穿越防护
@@ -173,6 +173,12 @@ func (s *Server) Router() *gin.Engine {
 		api.PUT("/workflows/:id", workflowH.update)
 		api.DELETE("/workflows/:id", workflowH.delete)
 
+		// Templates（模板市场）
+		api.GET("/templates", workflowH.listTemplates)
+		api.GET("/templates/categories", workflowH.listCategories)
+		api.GET("/templates/:id", workflowH.getTemplate)
+		api.POST("/templates/:id/use", workflowH.useTemplate) // 一键使用
+
 		// Task
 		api.POST("/tasks", taskH.create)
 		api.GET("/tasks", taskH.list)
@@ -214,6 +220,10 @@ func (s *Server) Router() *gin.Engine {
 			api.GET("/agents/capabilities", agentH.capabilities) // 能力标签列表（前端筛选器用）
 			api.GET("/agents/runtime-types", agentH.runtimeTypes) // Runtime 类型列表
 			api.GET("/agents/discover", agentH.discover) // 按能力发现 Agent
+			// Agent 市场（注意：必须在 /:id 之前，否则 marketplace 会被当作 id）
+			api.GET("/agents/marketplace", agentH.marketplaceList)
+			api.GET("/agents/marketplace/:id", agentH.marketplaceDetail)
+			api.POST("/agents/marketplace/:id/install", agentH.marketplaceInstall)
 			api.GET("/agents/:id", agentH.get)
 			api.PUT("/agents/:id", agentH.update)
 			api.DELETE("/agents/:id", agentH.delete)

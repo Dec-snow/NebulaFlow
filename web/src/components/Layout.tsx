@@ -1,19 +1,38 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Boxes, Database, Gauge, GitBranch, LayoutDashboard, LogOut, Zap, Bot } from "lucide-react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  Boxes,
+  Database,
+  Gauge,
+  GitBranch,
+  LayoutDashboard,
+  LogOut,
+  Zap,
+  Bot,
+  Sparkles,
+  ChevronDown,
+  ChevronRight,
+  Store,
+} from "lucide-react";
+import { useState } from "react";
 import { useAuth } from "../store/auth";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/workflows", label: "Workflows", icon: GitBranch },
+  { to: "/templates", label: "Templates", icon: Sparkles },
   { to: "/tasks", label: "Tasks", icon: Zap },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/knowledge", label: "Knowledge", icon: Database },
-  { to: "/models", label: "Models", icon: Boxes },
+];
+
+const agentSubNav = [
+  { to: "/agents", label: "我的 Agent", icon: Bot },
+  { to: "/agents/marketplace", label: "Agent 市场", icon: Store },
 ];
 
 export default function Layout() {
   const { username, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const agentsActive = location.pathname.startsWith("/agents");
 
   return (
     <div className="flex h-screen">
@@ -27,12 +46,70 @@ export default function Layout() {
           <p className="text-[10px] text-slate-500 mt-1">AI Agent Workflow Platform</p>
         </div>
 
-        <nav className="flex-1 py-4 px-3 space-y-1">
+        <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
           {nav.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                  isActive
+                    ? "bg-nebula-800 text-nebula-300 border border-nebula-700"
+                    : "text-slate-400 hover:bg-nebula-800/60 hover:text-slate-200"
+                }`
+              }
+            >
+              <Icon size={16} />
+              {label}
+            </NavLink>
+          ))}
+
+          {/* Agents 分组 */}
+          <div className="pt-2">
+            <div
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors cursor-pointer ${
+                agentsActive
+                  ? "bg-nebula-800 text-nebula-300 border border-nebula-700"
+                  : "text-slate-400 hover:bg-nebula-800/60 hover:text-slate-200"
+              }`}
+              onClick={() => navigate("/agents")}
+            >
+              <Bot size={16} />
+              <span className="flex-1">Agents</span>
+              {agentsActive ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            </div>
+
+            {agentsActive && (
+              <div className="mt-1 ml-4 space-y-0.5 border-l border-nebula-800 pl-2">
+                {agentSubNav.map(({ to, label, icon: Icon }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/agents"}
+                    className={({ isActive }) =>
+                      `flex items-center gap-2 px-2.5 py-1.5 rounded-md text-[11px] transition-colors ${
+                        isActive
+                          ? "bg-nebula-700/60 text-nebula-200"
+                          : "text-slate-500 hover:bg-nebula-800/60 hover:text-slate-300"
+                      }`
+                    }
+                  >
+                    <Icon size={12} />
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {[
+            { to: "/knowledge", label: "Knowledge", icon: Database },
+            { to: "/models", label: "Models", icon: Boxes },
+          ].map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                   isActive

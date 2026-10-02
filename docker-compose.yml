@@ -5,13 +5,13 @@ services:
     environment:
       POSTGRES_USER: nebula
       POSTGRES_PASSWORD: nebula
-      POSTGRES_DB: nebula
+      POSTGRES_DB: nebulaflow
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nebula"]
+      test: ["CMD-SHELL", "pg_isready -U nebula -d nebulaflow"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -31,22 +31,72 @@ services:
       retries: 5
 
   app:
-    image: ghcr.io/dec-snow/nebulaflow:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nebulaflow:latest
     restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
-      NEBULA_ENV: production
-      NEBULA_HTTP_ADDR: ":8080"
-      NEBULA_PG_DSN: "postgres://nebula:nebula@postgres:5432/nebula?sslmode=disable"
-      NEBULA_REDIS_ADDR: "redis:6379"
-      NEBULA_JWT_SECRET: "change-me-in-production-please"
+      APP_ENV: prod
+      PORT: "8080"
+      DATABASE_URL: "postgres://nebula:nebula@postgres:5432/nebulaflow?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      # ⚠ 生产环境请务必修改：openssl rand -hex 32
+      JWT_SECRET: "please-change-this-to-a-strong-random-secret-32chars+"
+      JWT_EXPIRE_HOURS: "72"
+      WORKER_COUNT: "20"
+      USE_REDIS_QUEUE: "true"
+      STORAGE_MODE: "postgres"
+      RATE_LIMIT_PER_MIN: "120"
+      TASK_RATE_LIMIT_PER_MIN: "60"
+      CORS_ORIGINS: "*"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
 
 volumes:
   pg_data:
   redis_data:
+  prometheus_data:
+  grafana_data:
