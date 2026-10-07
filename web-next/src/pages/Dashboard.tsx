@@ -94,7 +94,7 @@ export default function Dashboard() {
           <Stat
             key={k.key}
             label={k.label}
-            value={k.value.toLocaleString()}
+            value={k.value?.toLocaleString() ?? "—"}
             unit={k.unit}
             delta={k.delta}
             deltaGood={k.deltaGood}
@@ -230,7 +230,7 @@ export default function Dashboard() {
                 {t.durationMs >= 1000 ? `${(t.durationMs / 1000).toFixed(1)}s` : `${t.durationMs}ms`}
               </span>
               <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {t.tokens.toLocaleString()} tok
+                {t.tokens?.toLocaleString() ?? "—"} tok
               </span>
             </Link>
           ))}

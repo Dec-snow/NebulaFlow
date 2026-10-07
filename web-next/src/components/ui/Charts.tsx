@@ -297,7 +297,7 @@ export function BarSeries({
             />
           </div>
           <span className="tnum w-14 shrink-0 text-right text-xs text-fg">
-            {it.value.toLocaleString()}
+            {it.value?.toLocaleString() ?? "—"}
           </span>
         </div>
       ))}
