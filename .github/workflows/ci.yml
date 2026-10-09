@@ -91,7 +91,15 @@ jobs:
           key: ${{ secrets.DEPLOY_KEY }}
           script: |
             mkdir -p /var/www/nebula
+            # 备份当前 index.html 用于对比
+            cp /var/www/nebula/index.html /tmp/index.html.bak 2>/dev/null || true
+            # 解压新构建
             tar -xzf /tmp/frontend.tar.gz -C /var/www/nebula
             rm /tmp/frontend.tar.gz
+            # 清理旧的带 hash 资源文件（保留最新的）
+            cd /var/www/nebula/assets
+            ls -t index-*.js | tail -n +3 | xargs -r rm -f
+            ls -t index-*.css | tail -n +3 | xargs -r rm -f
+            # reload nginx
             nginx -t && nginx -s reload
             echo "deploy ok"
