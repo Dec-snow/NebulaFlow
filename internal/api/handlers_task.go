@@ -140,14 +140,17 @@ func (h *taskHandler) stream(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
-	c.Header("Access-Control-Allow-Origin", "*")
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
 		return
 	}
 
-	ch, unsub := h.svc.Hub().Subscribe(id)
+	ch, unsub, err := h.svc.Hub().Subscribe(id, u.ID)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
 	defer unsub()
 
 	// 发送当前任务快照（重连恢复）

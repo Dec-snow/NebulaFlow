@@ -170,6 +170,7 @@ func validProdConfig() *Config {
 	return &Config{
 		Env:                 "prod",
 		JWTSecret:           strongSecret,
+		EncryptionKey:       strongSecret, // 32 字节，同 strongSecret
 		StorageMode:         "postgres",
 		UseRedisQueue:       true,
 		QueueAdmitRatio:     0.8,
@@ -242,6 +243,49 @@ func TestValidateJWTSecret(t *testing.T) {
 			}
 			if found && p.Fatal != tc.wantFatal {
 				t.Errorf("JWT_SECRET=%q：期望致命=%v，实际=%v", tc.secret, tc.wantFatal, p.Fatal)
+			}
+		})
+	}
+}
+
+// ---------- ENCRYPTION_KEY 校验 ----------
+//
+// 与 JWT_SECRET 不同：加密密钥在 dev 下允许为空（降级明文），
+// 只有非 dev 环境才强制要求 32 字节。
+// 这是为了保证「零配置启动」的承诺——本地开发不需要设加密密钥。
+func TestValidateEncryptionKey(t *testing.T) {
+	cases := []struct {
+		name      string
+		env       string
+		key       string
+		wantIssue bool
+		wantFatal bool
+	}{
+		// —— prod 环境 ——
+		{"prod: 空密钥", "prod", "", true, true},
+		{"prod: 31 字节（差一个）", "prod", strings.Repeat("x", 31), true, true},
+		{"prod: 正好 32 字节", "prod", strongSecret, false, false},
+		{"prod: 超过 32 字节", "prod", strings.Repeat("0123456789abcdef", 4), false, false},
+
+		// —— dev 环境 ——
+		{"dev: 空密钥（允许，降级明文）", "dev", "", false, false},
+		{"dev: 31 字节（允许，dev 不校验）", "dev", strings.Repeat("x", 31), false, false},
+		{"dev: 32 字节（正常）", "dev", strongSecret, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validProdConfig()
+			cfg.Env = tc.env
+			cfg.EncryptionKey = tc.key
+
+			p, found := problemFor(cfg.Validate(), "ENCRYPTION_KEY")
+			if found != tc.wantIssue {
+				t.Fatalf("ENCRYPTION_KEY=%q (env=%s)：期望有问题=%v，实际=%v（%v）",
+					tc.key, tc.env, tc.wantIssue, found, p)
+			}
+			if found && p.Fatal != tc.wantFatal {
+				t.Errorf("ENCRYPTION_KEY=%q (env=%s)：期望致命=%v，实际=%v",
+					tc.key, tc.env, tc.wantFatal, p.Fatal)
 			}
 		})
 	}

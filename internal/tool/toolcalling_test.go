@@ -308,7 +308,9 @@ func TestHTTPToolCallWithArgumentsKeepsURLAndMethod(t *testing.T) {
 	defer srv.Close()
 
 	args, _ := json.Marshal(map[string]string{"url": srv.URL, "method": "POST"})
-	out, err := NewHTTPTool().CallWithArguments(context.Background(), string(args))
+	tool := NewHTTPTool()
+	tool.disableSafeguard = true // 测试用 httptest 跑在 127.0.0.1:随机端口，跳过 SSRF 校验
+	out, err := tool.CallWithArguments(context.Background(), string(args))
 	if err != nil {
 		t.Fatalf("失败: %v", err)
 	}

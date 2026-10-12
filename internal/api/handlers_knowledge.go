@@ -13,8 +13,9 @@ import (
 )
 
 type knowledgeHandler struct {
-	store *store.Store
-	rag   *rag.Service
+	store   *store.Store
+	rag     *rag.Service
+	indexer *rag.Indexer
 }
 
 // POST /api/knowledge-bases
@@ -132,11 +133,26 @@ func (h *knowledgeHandler) uploadDoc(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	// 同步索引：分块 + 向量化 + 入库（首版数据量小；大文件可改为异步）
-	if err := h.indexDocument(c.Request.Context(), doc); err != nil {
-		_ = h.store.Knowledge.UpdateDocumentStatus(c.Request.Context(), doc.ID, model.DocFailed)
-		c.JSON(http.StatusOK, gin.H{"document": doc, "warning": "index failed: " + err.Error()})
-		return
+	// 异步索引：提交到后台队列，立即返回 202。
+	// 大文件向量化可能耗时较长，同步执行会导致 HTTP 超时；
+	// 客户端可通过 GET /documents 轮询或后续 SSE 等待索引完成。
+	if h.indexer != nil {
+		if err := h.indexer.Enqueue(doc); err != nil {
+			// 队列满时文档已创建但无法立即索引，返回 202 并提示稍后重试或自动排队。
+			// 这里选择返回成功但带 warning，让用户知道文档已上传、索引会延后。
+			c.JSON(http.StatusAccepted, gin.H{
+				"document": doc,
+				"warning":  "document uploaded, but index queue is full; will be retried later",
+			})
+			return
+		}
+	} else {
+		// 兼容未启用异步索引器的场景（如测试环境），退化为同步索引。
+		if err := h.indexDocument(c.Request.Context(), doc); err != nil {
+			_ = h.store.Knowledge.UpdateDocumentStatus(c.Request.Context(), doc.ID, model.DocFailed)
+			c.JSON(http.StatusOK, gin.H{"document": doc, "warning": "index failed: " + err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusCreated, doc)
 }

@@ -64,7 +64,7 @@ func (r *KnowledgeRepo) CreateDocument(ctx context.Context, d *model.Document) e
 
 func (r *KnowledgeRepo) ListDocuments(ctx context.Context, kbID int64) ([]model.Document, error) {
 	rows, err := r.db.Pool.Query(ctx,
-		`SELECT id, knowledge_base_id, filename, status, created_at
+		`SELECT id, knowledge_base_id, filename, status, chunks, size_kb, error_message, created_at
 		 FROM documents WHERE knowledge_base_id=$1 ORDER BY created_at DESC`, kbID)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,8 @@ func (r *KnowledgeRepo) ListDocuments(ctx context.Context, kbID int64) ([]model.
 	var out []model.Document
 	for rows.Next() {
 		var d model.Document
-		if err := rows.Scan(&d.ID, &d.KnowledgeBaseID, &d.Filename, &d.Status, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.KnowledgeBaseID, &d.Filename, &d.Status,
+			&d.Chunks, &d.SizeKB, &d.ErrorMessage, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -84,9 +85,10 @@ func (r *KnowledgeRepo) ListDocuments(ctx context.Context, kbID int64) ([]model.
 func (r *KnowledgeRepo) GetDocument(ctx context.Context, docID int64) (*model.Document, error) {
 	d := &model.Document{}
 	err := r.db.Pool.QueryRow(ctx,
-		`SELECT id, knowledge_base_id, filename, status, content, created_at
+		`SELECT id, knowledge_base_id, filename, status, content, chunks, size_kb, error_message, created_at
 		 FROM documents WHERE id=$1`, docID,
-	).Scan(&d.ID, &d.KnowledgeBaseID, &d.Filename, &d.Status, &d.Content, &d.CreatedAt)
+	).Scan(&d.ID, &d.KnowledgeBaseID, &d.Filename, &d.Status, &d.Content,
+		&d.Chunks, &d.SizeKB, &d.ErrorMessage, &d.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrDocNotFound
 	}
@@ -99,6 +101,14 @@ func (r *KnowledgeRepo) GetDocument(ctx context.Context, docID int64) (*model.Do
 func (r *KnowledgeRepo) UpdateDocumentStatus(ctx context.Context, docID int64, status model.DocumentStatus) error {
 	_, err := r.db.Pool.Exec(ctx,
 		`UPDATE documents SET status=$2 WHERE id=$1`, docID, status)
+	return err
+}
+
+func (r *KnowledgeRepo) UpdateDocumentIndexResult(ctx context.Context, docID int64,
+	status model.DocumentStatus, chunks, sizeKb int, errorMsg string) error {
+	_, err := r.db.Pool.Exec(ctx,
+		`UPDATE documents SET status=$2, chunks=$3, size_kb=$4, error_message=$5 WHERE id=$1`,
+		docID, status, chunks, sizeKb, errorMsg)
 	return err
 }
 

@@ -124,11 +124,12 @@ type StoreStats struct {
 // 局限（必须说清楚）：进程重启即丢；多实例部署时每个实例只有自己那部分 span。
 // 生产环境应当把 OTLP endpoint 配上，让 collector 负责汇聚——本包两条路都支持。
 type SpanStore struct {
-	mu       sync.RWMutex
-	traces   map[string]*traceRecord
-	order    []string // 创建顺序，用于淘汰最老的 trace
-	maxTr    int
-	maxSpans int
+	mu          sync.RWMutex
+	traces      map[string]*traceRecord
+	order       []string // 创建顺序，用于淘汰最老的 trace
+	taskTraceIdx map[int64]string // taskID → traceID 反向索引，O(1) 反查
+	maxTr       int
+	maxSpans    int
 
 	spansExported atomic.Int64
 	spansRejected atomic.Int64
@@ -151,9 +152,10 @@ func NewSpanStore(maxTraces, maxSpansPerTrace int) *SpanStore {
 		maxSpansPerTrace = 200
 	}
 	return &SpanStore{
-		traces:   make(map[string]*traceRecord),
-		maxTr:    maxTraces,
-		maxSpans: maxSpansPerTrace,
+		traces:      make(map[string]*traceRecord),
+		taskTraceIdx: make(map[int64]string),
+		maxTr:       maxTraces,
+		maxSpans:    maxSpansPerTrace,
 	}
 }
 
@@ -204,8 +206,12 @@ func (s *SpanStore) ensureLocked(traceID string) *traceRecord {
 	for len(s.order) >= s.maxTr {
 		oldest := s.order[0]
 		s.order = s.order[1:]
-		if _, ok := s.traces[oldest]; ok {
+		if rec, ok := s.traces[oldest]; ok {
 			delete(s.traces, oldest)
+			// 同步清理反向索引
+			if rec.taskID != 0 {
+				delete(s.taskTraceIdx, rec.taskID)
+			}
 			s.tracesEvicted.Add(1)
 		}
 	}
@@ -224,7 +230,12 @@ func (s *SpanStore) Link(traceID string, taskID, ownerID int64) {
 	defer s.mu.Unlock()
 	rec := s.ensureLocked(traceID)
 	if taskID != 0 {
+		// 如果之前关联过别的 task，先清掉旧索引
+		if rec.taskID != 0 && rec.taskID != taskID {
+			delete(s.taskTraceIdx, rec.taskID)
+		}
 		rec.taskID = taskID
+		s.taskTraceIdx[taskID] = traceID
 	}
 	if ownerID != 0 {
 		rec.ownerID = ownerID
@@ -246,18 +257,15 @@ func (s *SpanStore) Owner(traceID string) (int64, bool) {
 }
 
 // TraceForTask 返回某个任务对应的 trace id。
+// 通过反向索引 O(1) 查找。
 func (s *SpanStore) TraceForTask(taskID int64) (string, bool) {
-	if s == nil {
+	if s == nil || taskID == 0 {
 		return "", false
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for id, rec := range s.traces {
-		if rec.taskID == taskID {
-			return id, true
-		}
-	}
-	return "", false
+	traceID, ok := s.taskTraceIdx[taskID]
+	return traceID, ok
 }
 
 // Snapshot 返回一条 trace 的完整视图。

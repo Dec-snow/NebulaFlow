@@ -6,11 +6,14 @@ import {
   Button,
   Card,
   EmptyState,
+  ErrorState,
   Input,
+  PageLoader,
   Segmented,
   StatusBadge,
 } from "@/components/ui";
-import { TASKS } from "@/lib/mock";
+import { api } from "@/api";
+import { useDebounce, useFetch } from "@/hooks";
 import { fmtDuration, timeAgo } from "@/lib/utils";
 
 type Filter = "all" | "running" | "succeeded" | "failed";
@@ -19,22 +22,32 @@ export default function Tasks() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounce(q, 300);
 
-  const list = TASKS.filter(
-    (t) =>
-      (filter === "all" || t.status === filter) &&
-      (q === "" ||
-        String(t.id).includes(q) ||
-        t.workflow.toLowerCase().includes(q.toLowerCase()) ||
-        t.input.toLowerCase().includes(q.toLowerCase())),
+  const { data, loading, error, refresh } = useFetch(
+    () =>
+      api.tasks.list({
+        status: filter === "all" ? undefined : filter,
+        q: debouncedQ || undefined,
+      }),
+    [filter, debouncedQ],
   );
 
+  const list = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  // 各状态数量（基于当前页数据近似）
+  const pageList = data?.items ?? [];
   const counts = {
-    all: TASKS.length,
-    running: TASKS.filter((t) => t.status === "running").length,
-    succeeded: TASKS.filter((t) => t.status === "succeeded").length,
-    failed: TASKS.filter((t) => t.status === "failed").length,
+    all: total,
+    running: pageList.filter((t) => t.status === "running").length,
+    succeeded: pageList.filter((t) => t.status === "succeeded").length,
+    failed: pageList.filter((t) => t.status === "failed").length,
   };
+
+  if (loading) return <PageLoader text="加载任务列表…" />;
+
+  if (error) return <ErrorState title="加载任务列表失败" description={error.message} onRetry={refresh} />;
 
   return (
     <div className="space-y-6">
@@ -42,7 +55,7 @@ export default function Tasks() {
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-fg">任务</h2>
           <p className="mt-0.5 text-xs text-fg-subtle">
-            共 {TASKS.length} 条执行记录 · 点击查看节点明细
+            共 {total} 条执行记录 · 点击查看节点明细
           </p>
         </div>
         <Button variant="outline" icon={<Filter size={14} />}>

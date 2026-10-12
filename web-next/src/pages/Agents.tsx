@@ -1,17 +1,21 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { Bot, Plus, Search, Trash2, Zap } from "lucide-react";
 import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   EmptyState,
+  ErrorState,
   Input,
   PageLoader,
   Segmented,
   StatusBadge,
+  ToastContainer,
+  useToast,
 } from "@/components/ui";
 import { api } from "@/api";
-import { useFetch } from "@/hooks";
+import { useDebounce, useFetch } from "@/hooks";
 import { cn } from "@/lib/utils";
 import type { Agent, AgentRuntimeType } from "@/types";
 
@@ -36,7 +40,7 @@ function AgentCard({ agent, onDelete, onTest }: { agent: Agent; onDelete: (id: n
         <span
           className={cn(
             "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
-            RUNTIME_TONE[agent.runtime_type],
+            RUNTIME_TONE[agent.runtimeType],
           )}
         >
           <Bot size={18} />
@@ -71,7 +75,7 @@ function AgentCard({ agent, onDelete, onTest }: { agent: Agent; onDelete: (id: n
           <StatusBadge status={agent.status} />
         </div>
         <Badge tone="neutral" className="text-2xs">
-          {RUNTIME_LABEL[agent.runtime_type]}
+          {RUNTIME_LABEL[agent.runtimeType]}
         </Badge>
       </div>
 
@@ -103,25 +107,42 @@ function AgentCard({ agent, onDelete, onTest }: { agent: Agent; onDelete: (id: n
 export default function Agents() {
   const [filter, setFilter] = useState<RuntimeFilter>("all");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounce(q, 300);
+  const { toasts, toast } = useToast();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  const { data, loading, refresh } = useFetch(
-    () => api.agents.list({ runtime_type: filter === "all" ? undefined : filter, q }),
-    [filter, q],
+  const { data, loading, error, refresh } = useFetch(
+    () => api.agents.list({ runtimeType: filter === "all" ? undefined : filter, q: debouncedQ }),
+    [filter, debouncedQ],
   );
 
   const counts = useMemo(() => {
     if (!data) return { all: 0, native: 0, langchain: 0, http: 0 };
     return {
       all: data.total,
-      native: data.items.filter((a) => a.runtime_type === "native").length,
-      langchain: data.items.filter((a) => a.runtime_type === "langchain").length,
-      http: data.items.filter((a) => a.runtime_type === "http").length,
+      native: data.items.filter((a) => a.runtimeType === "native").length,
+      langchain: data.items.filter((a) => a.runtimeType === "langchain").length,
+      http: data.items.filter((a) => a.runtimeType === "http").length,
     };
   }, [data]);
 
-  const handleDelete = async (id: number) => {
-    await api.agents.delete(id);
-    refresh();
+  const handleDeleteClick = (id: number) => {
+    setDeleteId(id);
+    setConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (deleteId == null) return;
+    try {
+      await api.agents.delete(deleteId);
+      toast("删除成功", "success");
+      setConfirmOpen(false);
+      setDeleteId(null);
+      refresh();
+    } catch (e) {
+      toast("删除失败，请重试", "error");
+    }
   };
 
   const handleTest = async (id: number) => {
@@ -131,6 +152,10 @@ export default function Agents() {
 
   if (loading) {
     return <PageLoader text="加载 Agent 列表…" />;
+  }
+
+  if (error) {
+    return <ErrorState title="加载 Agent 列表失败" description={error.message} onRetry={refresh} />;
   }
 
   const list = data?.items ?? [];
@@ -200,7 +225,7 @@ export default function Agents() {
             <AgentCard
               key={agent.id}
               agent={agent}
-              onDelete={handleDelete}
+              onDelete={handleDeleteClick}
               onTest={handleTest}
             />
           ))}
@@ -214,6 +239,22 @@ export default function Agents() {
           Agent 支持三种运行时：Native（内置引擎）、LangChain（Python 服务）、HTTP（外部服务）。
         </p>
       </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="确认删除 Agent？"
+        description="删除后无法恢复，相关工作流可能会受到影响。"
+        confirmText="删除"
+        cancelText="取消"
+        tone="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => {
+          setConfirmOpen(false);
+          setDeleteId(null);
+        }}
+      />
+
+      <ToastContainer toasts={toasts} />
     </div>
   );
 }

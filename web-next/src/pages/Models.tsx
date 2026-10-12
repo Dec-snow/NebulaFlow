@@ -13,10 +13,14 @@ import {
   Button,
   Card,
   CardHeader,
+  ErrorState,
   IconButton,
+  PageLoader,
   StatusBadge,
 } from "@/components/ui";
-import { PROVIDERS, type Provider } from "@/lib/mock";
+import { api } from "@/api";
+import { useFetch } from "@/hooks";
+import type { Provider } from "@/types";
 import { cn } from "@/lib/utils";
 
 function ProviderCard({ p }: { p: Provider }) {
@@ -102,7 +106,13 @@ function ProviderCard({ p }: { p: Provider }) {
 }
 
 export default function Models() {
-  const enabled = PROVIDERS.filter((p) => p.status !== "disabled");
+  const { data: providers, loading, error, refresh } = useFetch(() => api.providers.list(), []);
+
+  if (loading) return <PageLoader text="加载模型与供应商…" />;
+
+  if (error) return <ErrorState title="加载模型与供应商失败" description={error.message} onRetry={refresh} />;
+
+  const enabled = (providers ?? []).filter((p) => p.status !== "disabled");
 
   return (
     <div className="space-y-6">
@@ -171,7 +181,7 @@ export default function Models() {
 
       {/* Provider 卡片 */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {PROVIDERS.map((p) => (
+        {providers?.map((p) => (
           <ProviderCard key={p.id} p={p} />
         ))}
       </div>

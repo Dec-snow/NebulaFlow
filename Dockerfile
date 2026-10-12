@@ -1,5 +1,5 @@
 # ---- Stage 1: Frontend build ----
-FROM node:20-alpine AS frontend
+FROM node:22-alpine AS frontend
 
 WORKDIR /web
 COPY web-next/package.json web-next/package-lock.json ./
@@ -15,12 +15,20 @@ WORKDIR /src
 
 # Cache dependencies
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# Copy Go source (separate layer — only invalidates on Go code changes)
+COPY internal/ internal/
+COPY cmd/ cmd/
+
+# Copy frontend build artifacts (separate layer — only invalidates on frontend changes)
+COPY --from=frontend /web/dist ./web-next/dist
 
 # Build
-COPY . .
-COPY --from=frontend /web/dist ./web-next/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/nebula-server ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /out/nebula-server ./cmd/server
 
 # ---- Stage 3: Runtime ----
 FROM alpine:3.20

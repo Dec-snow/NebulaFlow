@@ -13,19 +13,42 @@ import {
   Card,
   CardHeader,
   EmptyState,
+  ErrorState,
   Input,
+  PageLoader,
   Progress,
   StatusBadge,
 } from "@/components/ui";
-import { KNOWLEDGE_BASES, RETRIEVE_HITS } from "@/lib/mock";
+import { api } from "@/api";
+import { useFetch } from "@/hooks";
+import type { KnowledgeBase, RetrievalHit } from "@/types";
 import { cn, timeAgo } from "@/lib/utils";
 
 export default function Knowledge() {
   const [selected, setSelected] = useState(1);
   const [query, setQuery] = useState("Worker Pool 背压机制");
-  const [searched, setSearched] = useState(true);
+  const [searched, setSearched] = useState(false);
 
-  const kb = KNOWLEDGE_BASES.find((k) => k.id === selected) ?? KNOWLEDGE_BASES[0];
+  const { data: bases, loading: basesLoading, error: basesError, refresh: refreshBases } = useFetch(
+    () => api.knowledge.list(),
+    [],
+  );
+
+  const { data: hits, loading: searchLoading } = useFetch(
+    () => {
+      if (!searched) return Promise.resolve([] as RetrievalHit[]);
+      return api.knowledge.search(selected, query);
+    },
+    [searched, selected, query],
+  );
+
+  if (basesLoading) return <PageLoader text="加载知识库…" />;
+
+  if (basesError) return <ErrorState title="加载知识库失败" description={basesError.message} onRetry={refreshBases} />;
+
+  const kb = bases?.find((k) => k.id === selected) ?? bases?.[0];
+  if (!kb) return <EmptyState icon={<Database size={19} />} title="暂无知识库" />;
+
   const totalChunks = kb.docs.reduce((s, d) => s + d.chunks, 0);
 
   return (
@@ -45,7 +68,7 @@ export default function Knowledge() {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* 左：知识库列表 */}
         <div className="space-y-2.5">
-          {KNOWLEDGE_BASES.map((k) => {
+          {bases?.map((k) => {
             const active = k.id === selected;
             const chunks = k.docs.reduce((s, d) => s + d.chunks, 0);
             return (
@@ -175,9 +198,11 @@ export default function Knowledge() {
                   title="等待检索"
                   description="输入问题后点击检索，结果会按相似度排序展示。"
                 />
+              ) : searchLoading ? (
+                <PageLoader text="检索中…" size="sm" />
               ) : (
                 <div className="space-y-2.5">
-                  {RETRIEVE_HITS.map((h, i) => (
+                  {hits?.map((h, i) => (
                     <div
                       key={h.id}
                       className="rounded-lg border border-line bg-surface-2/40 p-3.5 transition-colors hover:border-line-strong"

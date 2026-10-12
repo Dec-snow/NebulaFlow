@@ -47,7 +47,10 @@ import {
   Input,
   Select,
   Textarea,
+  ToastContainer,
+  useToast,
 } from "@/components/ui";
+import { api } from "@/api";
 import { EDITOR_EDGES, EDITOR_NODES, PROMPT_TEMPLATES, type EditorNode } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 
@@ -133,13 +136,44 @@ const PALETTE: { type: NodeKind; hint: string }[] = [
   { type: "output", hint: "汇总最终结果" },
 ];
 
+/* ============================================================
+ *  编辑器常量（魔法数字集中管理）
+ * ========================================================== */
+
+/** 自动布局：起始 X 坐标 */
+const LAYOUT_X0 = 20;
+/** 自动布局：层级间距（X 方向） */
+const LAYOUT_DX = 210;
+/** 自动布局：起始 Y 坐标 */
+const LAYOUT_Y0 = 20;
+/** 自动布局：同层节点间距（Y 方向） */
+const LAYOUT_DY = 150;
+
+/** 撤销/重做历史栈最大步数 */
+const HISTORY_MAX_STEPS = 50;
+/** 历史记录防抖延迟（ms），同一帧内多次变更合并为一次 */
+const HISTORY_DEBOUNCE_MS = 300;
+
+/** 节点宽度（px），用于拖拽时让光标落在节点中心 */
+const NODE_WIDTH = 168;
+/** 节点估算高度（px），用于拖拽定位 */
+const NODE_HEIGHT = 64;
+
+/** 环检测警告自动消失时间（ms） */
+const WARNING_TIMEOUT_MS = 3400;
+
+/** 默认最大重试次数 */
+const DEFAULT_MAX_RETRY = 2;
+/** 默认超时时间（秒） */
+const DEFAULT_TIMEOUT_SEC = 60;
+
 /** 新节点的默认配置，避免拖进来就是空表单。 */
 const DEFAULT_CONFIG: Record<NodeKind, EditorNode["config"]> = {
   input: {},
-  llm: { model: "deepseek-v3", prompt: "", system: "", maxRetry: 2, timeoutSec: 60 },
-  rag: { knowledgeBaseId: 1, prompt: "", maxRetry: 2, timeoutSec: 60 },
+  llm: { model: "deepseek-v3", prompt: "", system: "", maxRetry: DEFAULT_MAX_RETRY, timeoutSec: DEFAULT_TIMEOUT_SEC },
+  rag: { knowledgeBaseId: 1, prompt: "", maxRetry: DEFAULT_MAX_RETRY, timeoutSec: DEFAULT_TIMEOUT_SEC },
   condition: { expression: "{{input}} != ''" },
-  tool: { tool: "time", maxRetry: 2, timeoutSec: 60 },
+  tool: { tool: "time", maxRetry: DEFAULT_MAX_RETRY, timeoutSec: DEFAULT_TIMEOUT_SEC },
   output: {},
 };
 
@@ -242,10 +276,10 @@ function autoLayout(nodes: WFNode[], edges: Edge[]): WFNode[] {
   }
 
   // 与 mock 里的初始布局保持同一套间距，自动整理后观感一致
-  const X0 = 20;
-  const DX = 210;
-  const Y0 = 20;
-  const DY = 150;
+  const X0 = LAYOUT_X0;
+  const DX = LAYOUT_DX;
+  const Y0 = LAYOUT_Y0;
+  const DY = LAYOUT_DY;
 
   return nodes.map((n) => {
     const lv = level.get(n.id) ?? 0;
@@ -337,6 +371,7 @@ function EditorInner() {
   const { id } = useParams();
   const { screenToFlowPosition, deleteElements, fitView } = useReactFlow();
   const wrapRef = useRef<HTMLDivElement>(null);
+  const { toasts, toast } = useToast();
 
   const initialNodes = useMemo<WFNode[]>(
     () =>
@@ -378,8 +413,8 @@ function EditorInner() {
     history.length = idx + 1;
     history.push({ nodes: nds.map((n) => ({ ...n, position: { ...n.position } })), edges: eds.map((e) => ({ ...e })) });
     historyIndexRef.current = history.length - 1;
-    // 最多保留 50 步
-    if (history.length > 50) {
+    // 最多保留 HISTORY_MAX_STEPS 步
+    if (history.length > HISTORY_MAX_STEPS) {
       history.shift();
       historyIndexRef.current = history.length - 1;
     }
@@ -425,7 +460,7 @@ function EditorInner() {
     if (historyTimerRef.current) window.clearTimeout(historyTimerRef.current);
     historyTimerRef.current = window.setTimeout(() => {
       pushHistory(nodes, edges);
-    }, 300);
+    }, HISTORY_DEBOUNCE_MS);
   }, [nodes, edges, pushHistory]);
 
   useEffect(() => {
@@ -500,7 +535,7 @@ function EditorInner() {
 
   const flashWarning = useCallback((msg: string) => {
     setWarning(msg);
-    window.setTimeout(() => setWarning(null), 3400);
+    window.setTimeout(() => setWarning(null), WARNING_TIMEOUT_MS);
   }, []);
 
   /* ---------- 连线（含环检测） ---------- */
@@ -543,7 +578,7 @@ function EditorInner() {
           id: nextNodeId(kind, taken),
           type: "wf",
           // 让光标落在节点中心，而不是左上角
-          position: { x: pos.x - 84, y: pos.y - 32 },
+          position: { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 },
           data: { kind, config: { ...DEFAULT_CONFIG[kind] } },
         });
       });
@@ -597,12 +632,31 @@ function EditorInner() {
     setSelectedId(null);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setWarning(null);
-    // 模拟保存
-    window.setTimeout(() => {
-      flashWarning("已保存");
-    }, 100);
+    const workflowId = Number(id) || 1;
+    // 将节点和边转换为 API 需要的格式
+    const editorNodes: EditorNode[] = nodes.map((n) => ({
+      id: n.id,
+      type: n.data.kind,
+      x: n.position.x,
+      y: n.position.y,
+      config: n.data.config,
+    }));
+    const editorEdges: [string, string][] = edges.map((e) => [e.source, e.target]);
+    try {
+      const res = await api.workflows.save(workflowId, {
+        nodes: editorNodes,
+        edges: editorEdges,
+      });
+      if (res.success) {
+        toast("保存成功", "success");
+      } else {
+        toast("保存失败，请重试", "error");
+      }
+    } catch (e) {
+      toast("保存失败，请检查网络", "error");
+    }
   };
 
   const toggleFullscreen = () => {
@@ -1047,6 +1101,8 @@ function EditorInner() {
           )}
         </div>
       </div>
+
+      <ToastContainer toasts={toasts} />
     </div>
   );
 }

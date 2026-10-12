@@ -43,9 +43,12 @@ func (h *dashboardHandler) stats(c *gin.Context) {
 		running = h.metrics.RunningTasks.Load()
 	}
 
-	subscribers, dropped := int64(0), int64(0)
+	subscribers, dropped, sseUsers := int64(0), int64(0), 0
 	if h.hub != nil {
-		subscribers, dropped = h.hub.Stats()
+		s := h.hub.Stats()
+		subscribers = s.Subscribers
+		dropped = s.Dropped
+		sseUsers = s.Users
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -55,7 +58,8 @@ func (h *dashboardHandler) stats(c *gin.Context) {
 		"total_workers":   total,    // worker 总数（活跃/总数）
 		"running_tasks":   running,  // 正在执行的工作流任务
 		"sse_subscribers": subscribers,
-		"sse_dropped":     dropped, // 因客户端消费过慢被丢弃的事件数
+		"sse_users":       sseUsers,  // 有活跃 SSE 连接的用户数
+		"sse_dropped":     dropped,   // 因客户端消费过慢被丢弃的事件数
 		"timestamp":       time.Now().Format(time.RFC3339),
 	})
 }

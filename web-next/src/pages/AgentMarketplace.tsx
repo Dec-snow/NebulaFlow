@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { Bot, Check, Download, Search, Store } from "lucide-react";
 import {
   Badge,
   Button,
   Card,
   EmptyState,
+  ErrorState,
   Input,
   PageLoader,
   Segmented,
@@ -13,7 +14,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { api } from "@/api";
-import { useFetch } from "@/hooks";
+import { useDebounce, useFetch } from "@/hooks";
 import { cn } from "@/lib/utils";
 import type { Agent, AgentRuntimeType } from "@/types";
 
@@ -46,7 +47,7 @@ function MarketplaceAgentCard({
         <span
           className={cn(
             "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
-            RUNTIME_TONE[agent.runtime_type],
+            RUNTIME_TONE[agent.runtimeType],
           )}
         >
           <Bot size={18} />
@@ -84,7 +85,7 @@ function MarketplaceAgentCard({
       <div className="mt-3 flex items-center justify-between">
         <span className="font-mono text-2xs text-fg-subtle">v{agent.version}</span>
         <Badge tone="neutral" className="text-2xs">
-          {RUNTIME_LABEL[agent.runtime_type]}
+          {RUNTIME_LABEL[agent.runtimeType]}
         </Badge>
       </div>
 
@@ -107,17 +108,18 @@ function MarketplaceAgentCard({
 export default function AgentMarketplace() {
   const [filter, setFilter] = useState<RuntimeFilter>("all");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounce(q, 300);
   const [capFilter, setCapFilter] = useState<string>("all");
   const [installedSet, setInstalledSet] = useState<Set<string>>(new Set());
   const { toasts, toast } = useToast();
 
-  const { data, loading } = useFetch(
+  const { data, loading, error, refresh } = useFetch(
     () =>
       api.agents.marketplace({
-        runtime_type: filter === "all" ? undefined : filter,
-        q,
+        runtimeType: filter === "all" ? undefined : filter,
+        q: debouncedQ,
       }),
-    [filter, q],
+    [filter, debouncedQ],
   );
 
   // 收集所有能力标签
@@ -130,7 +132,7 @@ export default function AgentMarketplace() {
 
   // 合并初始已安装 + 新安装的
   const installedNames = useMemo(() => {
-    const base = new Set(data?.installed_names ?? []);
+    const base = new Set(data?.installedNames ?? []);
     installedSet.forEach((n) => base.add(n));
     return base;
   }, [data, installedSet]);
@@ -146,9 +148,9 @@ export default function AgentMarketplace() {
     if (!data) return { all: 0, native: 0, langchain: 0, http: 0 };
     return {
       all: data.items.length,
-      native: data.items.filter((a) => a.runtime_type === "native").length,
-      langchain: data.items.filter((a) => a.runtime_type === "langchain").length,
-      http: data.items.filter((a) => a.runtime_type === "http").length,
+      native: data.items.filter((a) => a.runtimeType === "native").length,
+      langchain: data.items.filter((a) => a.runtimeType === "langchain").length,
+      http: data.items.filter((a) => a.runtimeType === "http").length,
     };
   }, [data]);
 
@@ -160,6 +162,10 @@ export default function AgentMarketplace() {
 
   if (loading) {
     return <PageLoader text="加载 Agent 市场…" />;
+  }
+
+  if (error) {
+    return <ErrorState title="加载 Agent 市场失败" description={error.message} onRetry={refresh} />;
   }
 
   const list = filteredItems;

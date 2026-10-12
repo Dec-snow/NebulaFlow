@@ -171,14 +171,40 @@ func (r *WorkflowRepo) ListTemplates(ctx context.Context, userID int64, category
 	return out, rows.Err()
 }
 
+// ListTemplateCategories 返回用户可见模板的去重分类列表。
+// 用 SELECT DISTINCT 在数据库层去重，避免全表加载到内存再去重。
+func (r *WorkflowRepo) ListTemplateCategories(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := r.db.Pool.Query(ctx,
+		`SELECT DISTINCT category
+		 FROM workflows
+		 WHERE is_template=true
+		   AND (user_id=0 OR user_id=$1)
+		   AND category IS NOT NULL
+		   AND category <> ''
+		 ORDER BY category`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var cat string
+		if err := rows.Scan(&cat); err != nil {
+			return nil, err
+		}
+		out = append(out, cat)
+	}
+	return out, rows.Err()
+}
+
 // GetTemplate 获取模板详情。
-// 系统模板（user_id=0）所有人可见；用户自己的模板也可见。
-// 普通用户不能看别人的私有模板。
-func (r *WorkflowRepo) GetTemplate(ctx context.Context, id int64) (*model.Workflow, error) {
+// 系统模板（user_id=0）和用户自己的模板可见；普通用户不能看别人的私有模板。
+func (r *WorkflowRepo) GetTemplate(ctx context.Context, id, userID int64) (*model.Workflow, error) {
 	wf := &model.Workflow{}
 	err := r.db.Pool.QueryRow(ctx,
 		`SELECT id, user_id, name, description, status, is_template, category, icon, created_at, updated_at
-		 FROM workflows WHERE id=$1 AND is_template=true`, id,
+		 FROM workflows WHERE id=$1 AND is_template=true AND (user_id=0 OR user_id=$2)`, id, userID,
 	).Scan(&wf.ID, &wf.UserID, &wf.Name, &wf.Description, &wf.Status,
 		&wf.IsTemplate, &wf.Category, &wf.Icon, &wf.CreatedAt, &wf.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -203,7 +229,7 @@ func (r *WorkflowRepo) GetTemplate(ctx context.Context, id int64) (*model.Workfl
 // 在一个事务中：读模板 → 复制 workflow + nodes + edges → 返回新 workflow。
 func (r *WorkflowRepo) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {
 	// 读模板（含 nodes/edges）
-	tpl, err := r.GetTemplate(ctx, templateID)
+	tpl, err := r.GetTemplate(ctx, templateID, targetUserID)
 	if err != nil {
 		return nil, fmt.Errorf("template not found: %w", err)
 	}

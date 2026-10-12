@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid username or password")
-	ErrInvalidToken       = errors.New("invalid or expired token")
+	ErrInvalidCredentials   = errors.New("invalid username or password")
+	ErrInvalidToken         = errors.New("invalid or expired token")
+	ErrInsufficientPermission = errors.New("insufficient permission")
 )
 
 // dummyHash 是一个**固定**的 bcrypt 哈希，用于消除 Login 的时间侧信道。
@@ -51,6 +52,9 @@ type Store interface {
 	CreateUser(ctx context.Context, u *model.User) error
 	GetUserByUsername(ctx context.Context, username string) (*model.User, error)
 	GetUserByID(ctx context.Context, id int64) (*model.User, error)
+	GetUserRole(ctx context.Context, userID int64) (string, error)
+	SetUserRole(ctx context.Context, userID int64, role string) error
+	CountUsers(ctx context.Context) (int64, error)
 }
 
 type Service struct {
@@ -87,10 +91,23 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
+
+	// 第一个注册的用户自动获得 admin 角色（引导期便利，后续可由 admin 手动降级）。
+	// 用 COUNT 而不是"ID == 1"判断：ID 可能因迁移/重置而不连续。
+	role := model.RoleUser
+	count, err := s.store.CountUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("count users: %w", err)
+	}
+	if count == 0 {
+		role = model.RoleAdmin
+	}
+
 	u := &model.User{
 		Username:     username,
 		Email:        email,
 		PasswordHash: string(hash),
+		Role:         role,
 	}
 	if err := s.store.CreateUser(ctx, u); err != nil {
 		return nil, err // 唯一约束冲突由 store 层映射为 store.ErrUserExists（API 层 → 409）
@@ -159,4 +176,17 @@ func (s *Service) Parse(tokenStr string) (*Claims, error) {
 		return nil, ErrInvalidToken
 	}
 	return claims, nil
+}
+
+// RequireAdmin 校验指定用户是否拥有 admin 角色。
+// 非 admin 用户返回 ErrInsufficientPermission。
+func (s *Service) RequireAdmin(ctx context.Context, userID int64) error {
+	role, err := s.store.GetUserRole(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("get user role: %w", err)
+	}
+	if role != model.RoleAdmin {
+		return ErrInsufficientPermission
+	}
+	return nil
 }

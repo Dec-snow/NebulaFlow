@@ -9,11 +9,17 @@ import (
 
 // ---------- 用户与认证 ----------
 
+const (
+	RoleAdmin = "admin"
+	RoleUser  = "user"
+)
+
 type User struct {
 	ID           int64     `json:"id"`
 	Username     string    `json:"username"`
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
+	Role         string    `json:"role"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -183,9 +189,10 @@ type KnowledgeBase struct {
 type DocumentStatus string
 
 const (
-	DocPending DocumentStatus = "pending"
-	DocIndexed DocumentStatus = "indexed"
-	DocFailed  DocumentStatus = "failed"
+	DocPending  DocumentStatus = "pending"
+	DocIndexing DocumentStatus = "indexing"
+	DocIndexed  DocumentStatus = "indexed"
+	DocFailed   DocumentStatus = "failed"
 )
 
 type Document struct {
@@ -194,6 +201,9 @@ type Document struct {
 	Filename        string         `json:"filename"`
 	Status          DocumentStatus `json:"status"`
 	Content         string         `json:"content,omitempty"`
+	Chunks          int            `json:"chunks,omitempty"`
+	SizeKB          int            `json:"size_kb,omitempty"`
+	ErrorMessage    string         `json:"error_message,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
 }
 

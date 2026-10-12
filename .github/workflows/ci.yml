@@ -58,21 +58,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web-next/package-lock.json
-
-      - name: Build frontend
-        working-directory: web-next
-        run: |
-          npm ci
-          npm run build
-
-      - name: Create tarball
-        run: tar -czf frontend.tar.gz -C web-next/dist .
+          name: frontend
 
       - name: Copy to server
         uses: appleboy/scp-action@v0.1.7
@@ -83,23 +72,48 @@ jobs:
           source: frontend.tar.gz
           target: /tmp
 
-      - name: Deploy over SSH
+      - name: Copy nginx config to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          source: deploy/nebula.conf
+          target: /tmp
+
+      - name: Deploy over SSH (versioned release + symlink)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
           script: |
-            mkdir -p /var/www/nebula
-            # 备份当前 index.html 用于对比
-            cp /var/www/nebula/index.html /tmp/index.html.bak 2>/dev/null || true
-            # 解压新构建
-            tar -xzf /tmp/frontend.tar.gz -C /var/www/nebula
+            set -euo pipefail
+
+            RELEASES_DIR="/var/www/nebula/releases"
+            CURRENT_LINK="/var/www/nebula/current"
+            VERSION=$(date +%Y%m%d-%H%M%S)
+            RELEASE_DIR="${RELEASES_DIR}/${VERSION}"
+
+            # 1. 准备版本目录
+            mkdir -p "${RELEASE_DIR}"
+
+            # 2. 解压新版本
+            tar -xzf /tmp/frontend.tar.gz -C "${RELEASE_DIR}"
             rm /tmp/frontend.tar.gz
-            # 清理旧的带 hash 资源文件（保留最新的）
-            cd /var/www/nebula/assets
-            ls -t index-*.js | tail -n +3 | xargs -r rm -f
-            ls -t index-*.css | tail -n +3 | xargs -r rm -f
-            # reload nginx
+
+            # 3. 更新软链接（原子切换）
+            #    先建临时链接再 rename，避免 current 短暂不存在
+            ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}.tmp"
+            mv -T "${CURRENT_LINK}.tmp" "${CURRENT_LINK}"
+
+            # 4. 保留最近 5 个版本，旧的删除
+            cd "${RELEASES_DIR}"
+            ls -t | tail -n +6 | xargs -r rm -rf
+
+            # 5. 同步 nginx 配置（root 指向 current 软链接）并 reload
+            cp /tmp/nebula.conf /etc/nginx/conf.d/nebula.conf
+            rm -f /tmp/nebula.conf
             nginx -t && nginx -s reload
-            echo "deploy ok"
+
+            echo "deploy ok: ${VERSION}"

@@ -186,8 +186,12 @@ func (c *CachedWorkflows) ListTemplates(ctx context.Context, userID int64, categ
 	return c.next.ListTemplates(ctx, userID, category)
 }
 
-func (c *CachedWorkflows) GetTemplate(ctx context.Context, id int64) (*model.Workflow, error) {
-	return c.next.GetTemplate(ctx, id)
+func (c *CachedWorkflows) ListTemplateCategories(ctx context.Context, userID int64) ([]string, error) {
+	return c.next.ListTemplateCategories(ctx, userID)
+}
+
+func (c *CachedWorkflows) GetTemplate(ctx context.Context, id, userID int64) (*model.Workflow, error) {
+	return c.next.GetTemplate(ctx, id, userID)
 }
 
 func (c *CachedWorkflows) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {

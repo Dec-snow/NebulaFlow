@@ -703,6 +703,25 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 	// 节点重试计数：node_key -> 已重试次数
 	retryCount := make(map[string]int)
 
+	// 待重试节点的 timer map：用 time.AfterFunc 替代 go+Sleep，
+	// 任务完成时统一 Stop，避免 goroutine 膨胀与"任务结束后重试还在等"。
+	retryTimers := make(map[string]*time.Timer)
+	// 保护 retryTimers 的并发访问：submitNode 的 OnDone 在 worker goroutine 中回调，
+	// 而任务主循环在消费 goroutine 中读取，两者可能并发操作 timer map。
+	var retryMu sync.Mutex
+
+	// stopAllRetryTimers 停止所有待重试的 timer，任务结束时调用。
+	// 调用方持锁与否都安全——内部自己加锁。
+	stopAllRetryTimers := func() {
+		retryMu.Lock()
+		defer retryMu.Unlock()
+		for key, t := range retryTimers {
+			t.Stop()
+			delete(retryTimers, key)
+		}
+	}
+	defer stopAllRetryTimers()
+
 	// 从节点配置读取重试策略
 	getRetryPolicy := func(nodeKey string) model.RetryPolicy {
 		node := dag.Nodes[nodeKey]
@@ -815,20 +834,31 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 							"warn", fmt.Sprintf("node failed, will retry %d/%d after %v: %v",
 								retries+1, policy.MaxRetry, delay, o.err))
 
-						// 延迟重试：起一个 goroutine 等 delay 后重新提交
+						// 延迟重试：用 time.AfterFunc 替代 go+Sleep，
+						// 避免大面积故障时 goroutine 膨胀；任务结束时统一 Stop。
 						// 不减少 remaining（节点还在执行中）
 						// submitted[key] 已经是 true 了，保持不变
-						go func(key string, retries int, delay time.Duration) {
-							// 用 time.After 等，但如果任务取消了就提前退出
-							select {
-							case <-runCtx.Done():
+						timer := time.AfterFunc(delay, func() {
+							// 执行前先从 map 中移除自己
+							retryMu.Lock()
+							delete(retryTimers, o.key)
+							retryMu.Unlock()
+
+							// 如果任务上下文已取消，不再重试
+							if runCtx.Err() != nil {
 								return
-							case <-time.After(delay):
-								// 更新数据库里的重试计数
-								s.updateNodeRetryCount(runCtx, t.ID, key, retries)
-								submitNode(key)
 							}
-						}(o.key, retries+1, delay)
+							// 更新数据库里的重试计数
+							s.updateNodeRetryCount(runCtx, t.ID, o.key, retries+1)
+							submitNode(o.key)
+						})
+						retryMu.Lock()
+						// 防御：如果已有旧 timer（理论上不会，因为同一节点不会并发重试），先停掉
+						if old, ok := retryTimers[o.key]; ok {
+							old.Stop()
+						}
+						retryTimers[o.key] = timer
+						retryMu.Unlock()
 						continue // 不减少 remaining，不处理失败
 					}
 				}

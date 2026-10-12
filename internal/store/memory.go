@@ -195,6 +195,9 @@ func (r *memUserRepo) CreateUser(_ context.Context, u *model.User) error {
 	now := time.Now()
 	u.ID = m.nextID()
 	u.CreatedAt, u.UpdatedAt = now, now
+	if u.Role == "" {
+		u.Role = model.RoleUser
+	}
 	m.users[u.ID] = copyUser(u)
 	m.userNames[u.Username] = u.ID
 	m.userMails[u.Email] = u.ID
@@ -223,6 +226,39 @@ func (r *memUserRepo) GetUserByID(_ context.Context, id int64) (*model.User, err
 		return nil, ErrUserNotFound
 	}
 	return copyUser(u), nil
+}
+
+func (r *memUserRepo) GetUserRole(_ context.Context, userID int64) (string, error) {
+	m := r.m
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	u, ok := m.users[userID]
+	if !ok {
+		return "", ErrUserNotFound
+	}
+	return u.Role, nil
+}
+
+func (r *memUserRepo) SetUserRole(_ context.Context, userID int64, role string) error {
+	m := r.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	u, ok := m.users[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+	u.Role = role
+	u.UpdatedAt = time.Now()
+	return nil
+}
+
+func (r *memUserRepo) CountUsers(_ context.Context) (int64, error) {
+	m := r.m
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return int64(len(m.users)), nil
 }
 
 // ---------- 工作流 ----------
@@ -390,13 +426,42 @@ func (r *memWorkflowRepo) ListTemplates(_ context.Context, userID int64, categor
 	return out, nil
 }
 
-func (r *memWorkflowRepo) GetTemplate(_ context.Context, id int64) (*model.Workflow, error) {
+// ListTemplateCategories 返回用户可见模板的去重分类列表。
+func (r *memWorkflowRepo) ListTemplateCategories(_ context.Context, userID int64) ([]string, error) {
+	m := r.m
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	seen := make(map[string]bool)
+	var categories []string
+	for _, w := range m.workflows {
+		if !w.IsTemplate {
+			continue
+		}
+		if w.UserID != 0 && w.UserID != userID {
+			continue
+		}
+		if w.Category == "" || seen[w.Category] {
+			continue
+		}
+		seen[w.Category] = true
+		categories = append(categories, w.Category)
+	}
+	sort.Strings(categories)
+	return categories, nil
+}
+
+func (r *memWorkflowRepo) GetTemplate(_ context.Context, id, userID int64) (*model.Workflow, error) {
 	m := r.m
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	w, ok := m.workflows[id]
 	if !ok || !w.IsTemplate {
+		return nil, ErrWorkflowNotFound
+	}
+	// 系统模板（user_id=0）和自己的模板可见
+	if w.UserID != 0 && w.UserID != userID {
 		return nil, ErrWorkflowNotFound
 	}
 	c := copyWorkflow(w)
@@ -406,7 +471,7 @@ func (r *memWorkflowRepo) GetTemplate(_ context.Context, id int64) (*model.Workf
 }
 
 func (r *memWorkflowRepo) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {
-	tpl, err := r.GetTemplate(ctx, templateID)
+	tpl, err := r.GetTemplate(ctx, templateID, targetUserID)
 	if err != nil {
 		return nil, fmt.Errorf("template not found: %w", err)
 	}

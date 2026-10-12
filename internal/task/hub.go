@@ -5,9 +5,26 @@
 package task
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+// 连接数上限常量。
+const (
+	// MaxSubscriptionsPerUser 每用户最多并发 SSE 连接数。
+	MaxSubscriptionsPerUser = 10
+	// MaxTotalSubscriptions 全局总连接数上限。
+	MaxTotalSubscriptions = 100
+)
+
+// SSE 连接超限错误。
+var (
+	// ErrTooManyConnections 全局连接数达到上限。
+	ErrTooManyConnections = errors.New("too many sse connections")
+	// ErrUserConnectionsExceeded 单用户连接数达到上限。
+	ErrUserConnectionsExceeded = errors.New("user sse connection limit exceeded")
 )
 
 // EventType 定义 SSE 事件类型。
@@ -62,6 +79,12 @@ func NewEvent(t EventType, taskID int64) Event {
 // replayCap 是每个任务保留的最近事件数，供新订阅者（或断线重连）回放。
 const replayCap = 64
 
+// subInfo 记录单个订阅的元信息，用于退订时正确扣减用户计数。
+type subInfo struct {
+	ch     chan Event
+	userID int64
+}
+
 // Hub 维护 task → 订阅者通道的映射。
 //
 // 并发模型：全局一把互斥锁，Publish 在持锁期间完成「写回放缓冲 + 非阻塞发送」。
@@ -70,31 +93,73 @@ const replayCap = 64
 // unsub 同样需要这把锁，因此 close(ch) 与 ch <- ev 天然互斥，
 // 彻底排除 "send on closed channel" panic —— 原实现把发送放在锁外，
 // 正好留出了 close 与 send 重叠的窗口，SSE 客户端频繁断连时必然踩到。
+//
+// 连接数限制：
+//   - 每用户最多 MaxSubscriptionsPerUser 个并发连接
+//   - 全局最多 MaxTotalSubscriptions 个连接
+//   - 超出时 Subscribe 返回错误，避免服务器资源被耗尽
 type Hub struct {
 	mu       sync.Mutex
-	subs     map[int64]map[chan Event]struct{}
+	subs     map[int64]map[chan Event]subInfo // taskID -> channel -> subInfo
 	replay   map[int64][]Event
 	dropped  atomic.Int64
 	subCount atomic.Int64
+
+	// userSubs 记录每用户的连接数，用于单用户限流。
+	userSubs map[int64]int
+	// maxPerUser / maxTotal 是连接数上限，可由测试调整。
+	maxPerUser int
+	maxTotal   int
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		subs:   make(map[int64]map[chan Event]struct{}),
-		replay: make(map[int64][]Event),
+		subs:       make(map[int64]map[chan Event]subInfo),
+		replay:     make(map[int64][]Event),
+		userSubs:   make(map[int64]int),
+		maxPerUser: MaxSubscriptionsPerUser,
+		maxTotal:   MaxTotalSubscriptions,
 	}
 }
 
-// Subscribe 订阅某个任务的实时事件，返回事件通道与退订函数。
-// 订阅时会先回放该任务最近的事件，避免浏览器刚连上时错过已完成节点的状态。
-func (h *Hub) Subscribe(taskID int64) (<-chan Event, func()) {
-	ch := make(chan Event, 128)
+// SetLimits 允许测试或配置调整连接数上限（必须在使用前调用）。
+func (h *Hub) SetLimits(perUser, total int) {
 	h.mu.Lock()
-	if h.subs[taskID] == nil {
-		h.subs[taskID] = make(map[chan Event]struct{})
+	defer h.mu.Unlock()
+	if perUser > 0 {
+		h.maxPerUser = perUser
 	}
-	h.subs[taskID][ch] = struct{}{}
+	if total > 0 {
+		h.maxTotal = total
+	}
+}
+
+// Subscribe 订阅某个任务的实时事件，返回事件通道、退订函数和错误。
+// 订阅时会先回放该任务最近的事件，避免浏览器刚连上时错过已完成节点的状态。
+//
+// userID 用于连接数限制：每用户最多 MaxSubscriptionsPerUser 个并发 SSE 连接。
+// 超出单用户限制返回 ErrUserConnectionsExceeded，超出全局限制返回 ErrTooManyConnections。
+func (h *Hub) Subscribe(taskID int64, userID int64) (<-chan Event, func(), error) {
+	h.mu.Lock()
+
+	// ---- 连接数校验 ----
+	total := int(h.subCount.Load())
+	if total >= h.maxTotal {
+		h.mu.Unlock()
+		return nil, nil, ErrTooManyConnections
+	}
+	if h.userSubs[userID] >= h.maxPerUser {
+		h.mu.Unlock()
+		return nil, nil, ErrUserConnectionsExceeded
+	}
+
+	ch := make(chan Event, 128)
+	if h.subs[taskID] == nil {
+		h.subs[taskID] = make(map[chan Event]subInfo)
+	}
+	h.subs[taskID][ch] = subInfo{ch: ch, userID: userID}
 	h.subCount.Add(1)
+	h.userSubs[userID]++
 	backlog := append([]Event(nil), h.replay[taskID]...)
 	h.mu.Unlock()
 
@@ -112,10 +177,15 @@ func (h *Hub) Subscribe(taskID int64) (<-chan Event, func()) {
 		once.Do(func() {
 			h.mu.Lock()
 			if set := h.subs[taskID]; set != nil {
-				if _, ok := set[ch]; ok {
+				if info, ok := set[ch]; ok {
 					delete(set, ch)
 					close(ch)
 					h.subCount.Add(-1)
+					// 扣减用户计数
+					h.userSubs[info.userID]--
+					if h.userSubs[info.userID] <= 0 {
+						delete(h.userSubs, info.userID)
+					}
 				}
 				if len(set) == 0 {
 					delete(h.subs, taskID)
@@ -125,7 +195,7 @@ func (h *Hub) Subscribe(taskID int64) (<-chan Event, func()) {
 			h.mu.Unlock()
 		})
 	}
-	return ch, unsub
+	return ch, unsub, nil
 }
 
 // Publish 向订阅者广播事件（非阻塞，满了丢弃并计数）。
@@ -164,8 +234,29 @@ func (h *Hub) SubscriberCount(taskID int64) int {
 	return len(h.subs[taskID])
 }
 
-// Stats 返回 Hub 的运行时指标：订阅者总数与被丢弃的事件总数。
+// UserSubscriberCount 返回某用户的实时订阅数（用于监控）。
+func (h *Hub) UserSubscriberCount(userID int64) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.userSubs[userID]
+}
+
+// HubStats 是 Hub 的运行时指标快照。
+type HubStats struct {
+	Subscribers int64 // 总订阅数
+	Dropped     int64 // 被丢弃的事件总数
+	Users       int   // 有活跃连接的用户数
+}
+
+// Stats 返回 Hub 的运行时指标：订阅者总数、被丢弃的事件总数、活跃用户数。
 // 丢弃数上升说明某个 SSE 客户端消费过慢，是排查"前端卡住"的第一手线索。
-func (h *Hub) Stats() (subscribers, dropped int64) {
-	return h.subCount.Load(), h.dropped.Load()
+func (h *Hub) Stats() HubStats {
+	h.mu.Lock()
+	users := len(h.userSubs)
+	h.mu.Unlock()
+	return HubStats{
+		Subscribers: h.subCount.Load(),
+		Dropped:     h.dropped.Load(),
+		Users:       users,
+	}
 }

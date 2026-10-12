@@ -1,11 +1,11 @@
-/**
+﻿/**
  * API 服务层：统一数据获取入口。
  *
  * 设计原则：
- * 1. 所有页面通过 import { xxxApi } from "@/api" 获取数据，不直接 import mock
+ * 1. 所有页面通过 import { api } from "@/api" 获取数据，不直接 import mock
  * 2. 通过 VITE_USE_MOCK 环境变量切换真实 API / Mock API
  * 3. 所有方法返回 Promise，模拟真实网络请求延迟
- * 4. 类型定义集中在这里，前后端联调时只改实现不改类型
+ * 4. 类型定义集中在 @/types，前后端联调时只改实现不改类型
  */
 
 import {
@@ -26,33 +26,63 @@ import {
   AGENTS,
   MARKETPLACE_AGENTS,
   WORKFLOW_TEMPLATES,
-  type WorkflowSummary,
-  type TaskRow,
-  type Provider,
-  type KnowledgeBase,
-  type ActivityItem,
-  type Kpi,
-  type EditorNode,
-  type TaskNodeRow,
-  type Agent,
-  type WorkflowTemplate,
+  COST_BY_MODEL,
+  COST_BY_WORKFLOW,
+  COST_TREND,
+  COST_TREND_LABELS,
 } from "@/lib/mock";
 
+import type {
+  WorkflowSummary,
+  TaskRow,
+  Provider,
+  KnowledgeBase,
+  ActivityItem,
+  Kpi,
+  EditorNode,
+  TaskNodeRow,
+  Agent,
+  WorkflowTemplate,
+  PaginationParams,
+  ListResponse,
+  RetrievalHit,
+  CostByModel,
+  CostByWorkflow,
+} from "@/types";
+
+export type { PaginationParams, ListResponse } from "@/types";
+
 /* ============================================================
- * 类型定义（前后端契约）
+ *  响应转换工具：snake_case → camelCase
  * ========================================================== */
 
-export interface PaginationParams {
-  page?: number;
-  pageSize?: number;
+/**
+ * 将 snake_case 键名转为 camelCase。
+ * 后端（Go）通常返回 snake_case，前端统一用 camelCase，
+ * 在 API 层做一次转换，组件层无需感知命名差异。
+ */
+function camelize(str: string): string {
+  return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
-export interface ListResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
+/** 递归转换对象的所有 snake_case 键为 camelCase。 */
+function camelizeKeys<T = unknown>(obj: unknown): T {
+  if (Array.isArray(obj)) {
+    return obj.map((item) => camelizeKeys(item)) as unknown as T;
+  }
+  if (obj !== null && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      result[camelize(key)] = camelizeKeys(value);
+    }
+    return result as T;
+  }
+  return obj as T;
 }
+
+/* ============================================================
+ * 复合数据类型
+ * ========================================================== */
 
 export interface DashboardData {
   kpis: Kpi[];
@@ -62,6 +92,28 @@ export interface DashboardData {
   tokenByProvider: typeof TOKEN_BY_PROVIDER;
   activity: ActivityItem[];
   recentTasks: TaskRow[];
+}
+
+export interface CostData {
+  byModel: CostByModel[];
+  byWorkflow: CostByWorkflow[];
+  trend: number[];
+  trendLabels: string[];
+}
+
+export interface AgentListParams extends PaginationParams {
+  runtimeType?: string;
+  q?: string;
+}
+
+export interface AgentMarketplaceResponse {
+  items: Agent[];
+  installedNames: string[];
+}
+
+export interface TemplateListParams extends PaginationParams {
+  category?: string;
+  q?: string;
 }
 
 /* ============================================================
@@ -158,7 +210,7 @@ async function getTask(id: number): Promise<{
   return delay({ task, nodes });
 }
 
-/* ------------------------------------------------ Providers */
+/* ------------------------------------------------ Providers / Models */
 
 async function listProviders(): Promise<Provider[]> {
   return delay(PROVIDERS);
@@ -173,30 +225,43 @@ async function listKnowledgeBases(): Promise<KnowledgeBase[]> {
 async function searchKnowledge(
   baseId: number,
   query: string,
-): Promise<typeof RETRIEVE_HITS> {
+): Promise<RetrievalHit[]> {
   console.log("[api] search knowledge", baseId, query);
   return delay(RETRIEVE_HITS, 400);
 }
 
+/* ------------------------------------------------ Cost */
+
+async function getCostAnalysis(range: string = "30d"): Promise<CostData> {
+  const multiplier = range === "7d" ? 0.25 : range === "90d" ? 3 : 1;
+  return delay({
+    byModel: COST_BY_MODEL.map((m) => ({
+      ...m,
+      tokensIn: Math.round(m.tokensIn * multiplier),
+      tokensOut: Math.round(m.tokensOut * multiplier),
+      cost: +(m.cost * multiplier).toFixed(2),
+      calls: Math.round(m.calls * multiplier),
+    })),
+    byWorkflow: COST_BY_WORKFLOW.map((w) => ({
+      ...w,
+      cost: +(w.cost * multiplier).toFixed(2),
+      tasks: Math.round(w.tasks * multiplier),
+      avgCost: +(w.avgCost * multiplier).toFixed(4),
+    })),
+    trend: COST_TREND.map((v) => +(v * multiplier).toFixed(2)),
+    trendLabels: COST_TREND_LABELS,
+  });
+}
+
 /* ------------------------------------------------ Agents */
-
-export interface AgentListParams extends PaginationParams {
-  runtime_type?: string;
-  q?: string;
-}
-
-export interface AgentMarketplaceResponse {
-  items: Agent[];
-  installed_names: string[];
-}
 
 async function listAgents(
   params: AgentListParams = {},
 ): Promise<ListResponse<Agent>> {
-  const { runtime_type, q, page = 1, pageSize = 20 } = params;
+  const { runtimeType, q, page = 1, pageSize = 20 } = params;
   let list = AGENTS.filter(
     (a) =>
-      (!runtime_type || a.runtime_type === runtime_type) &&
+      (!runtimeType || a.runtimeType === runtimeType) &&
       (!q ||
         a.name.toLowerCase().includes(q.toLowerCase()) ||
         a.description.toLowerCase().includes(q.toLowerCase())),
@@ -210,17 +275,17 @@ async function listAgents(
 async function listMarketplaceAgents(
   params: AgentListParams = {},
 ): Promise<AgentMarketplaceResponse> {
-  const { runtime_type, q } = params;
-  const installed_names = AGENTS.map((a) => a.name);
+  const { runtimeType, q } = params;
+  const installedNames = AGENTS.map((a) => a.name);
   let items = MARKETPLACE_AGENTS.filter(
     (a) =>
-      (!runtime_type || a.runtime_type === runtime_type) &&
+      (!runtimeType || a.runtimeType === runtimeType) &&
       (!q ||
         a.name.toLowerCase().includes(q.toLowerCase()) ||
         a.description.toLowerCase().includes(q.toLowerCase()) ||
         a.capabilities.some((c) => c.toLowerCase().includes(q.toLowerCase()))),
   );
-  return delay({ items, installed_names });
+  return delay({ items, installedNames });
 }
 
 async function installAgent(id: number): Promise<{ success: boolean }> {
@@ -237,16 +302,16 @@ async function createAgent(payload: Partial<Agent>): Promise<Agent> {
   console.log("[api] create agent", payload);
   const newAgent: Agent = {
     id: AGENTS.length + 100,
-    user_id: 1,
+    userId: 1,
     name: payload.name ?? "New Agent",
     description: payload.description ?? "",
-    runtime_type: (payload.runtime_type as Agent["runtime_type"]) ?? "native",
+    runtimeType: (payload.runtimeType as Agent["runtimeType"]) ?? "native",
     endpoint: payload.endpoint,
     model: payload.model,
     capabilities: payload.capabilities ?? [],
     status: "active",
     version: payload.version ?? "0.1.0",
-    timeout_sec: payload.timeout_sec ?? 60,
+    timeoutSec: payload.timeoutSec ?? 60,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -254,11 +319,6 @@ async function createAgent(payload: Partial<Agent>): Promise<Agent> {
 }
 
 /* ------------------------------------------------ Templates */
-
-export interface TemplateListParams extends PaginationParams {
-  category?: string;
-  q?: string;
-}
 
 async function listTemplates(
   params: TemplateListParams = {},
@@ -306,6 +366,7 @@ export const api = {
   tasks: { list: listTasks, get: getTask },
   providers: { list: listProviders },
   knowledge: { list: listKnowledgeBases, search: searchKnowledge },
+  cost: { get: getCostAnalysis },
   agents: {
     list: listAgents,
     marketplace: listMarketplaceAgents,

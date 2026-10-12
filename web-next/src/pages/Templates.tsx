@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Layers, Search, Sparkles, Users } from "lucide-react";
 import {
@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   EmptyState,
+  ErrorState,
   Input,
   PageLoader,
   Segmented,
@@ -13,7 +14,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { api } from "@/api";
-import { useFetch } from "@/hooks";
+import { useDebounce, useFetch } from "@/hooks";
 import { cn } from "@/lib/utils";
 import type { WorkflowTemplate } from "@/types";
 
@@ -62,7 +63,7 @@ function TemplateCard({
         </span>
         <span className="flex items-center gap-1 text-2xs text-fg-subtle">
           <Users size={11} />
-          <span className="tnum">{template.used_count.toLocaleString()} 次使用</span>
+          <span className="tnum">{template.usedCount.toLocaleString()} 次使用</span>
         </span>
       </div>
 
@@ -86,16 +87,17 @@ function TemplateCard({
 export default function Templates() {
   const [category, setCategory] = useState<string>("all");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounce(q, 300);
   const navigate = useNavigate();
   const { toasts, toast } = useToast();
 
-  const { data, loading } = useFetch(
+  const { data, loading, error, refresh } = useFetch(
     () =>
       api.templates.list({
         category: category === "all" ? undefined : category,
-        q,
+        q: debouncedQ,
       }),
-    [category, q],
+    [category, debouncedQ],
   );
 
   const { data: categories } = useFetch(() => api.templates.categories(), []);
@@ -133,6 +135,10 @@ export default function Templates() {
 
   if (loading) {
     return <PageLoader text="加载模板市场…" />;
+  }
+
+  if (error) {
+    return <ErrorState title="加载模板市场失败" description={error.message} onRetry={refresh} />;
   }
 
   const list = data?.items ?? [];

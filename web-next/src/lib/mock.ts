@@ -1,10 +1,30 @@
-/**
+﻿/**
  * 框架演示数据。
  *
  * 全部为前端 mock，目的是让框架脱离后端即可完整预览。
  * 接入真实接口时，把这些常量替换为 fetch 结果即可 —— 页面只消费这些类型，
  * 不关心数据来源。
+ *
+ * 类型定义统一从 @/types 导入。
  */
+
+import type {
+  Kpi,
+  ActivityItem,
+  WorkflowSummary,
+  TaskRow,
+  TaskNodeRow,
+  Provider,
+  KnowledgeBase,
+  RetrievalHit,
+  EditorNode,
+  Agent,
+  WorkflowTemplate,
+  PromptTemplate,
+  CostByModel,
+  CostByWorkflow,
+  ModelPricing,
+} from "@/types";
 
 /** 确定性伪随机，保证每次刷新数据一致（避免视觉抖动）。 */
 function seeded(seed: number) {
@@ -16,16 +36,6 @@ function seeded(seed: number) {
 }
 
 /* ------------------------------------------------------------------ 指标 */
-export interface Kpi {
-  key: string;
-  label: string;
-  value: number;
-  unit?: string;
-  delta: number;
-  deltaGood: "up" | "down";
-  tone: "brand" | "mint" | "sky" | "violet" | "amber";
-  spark: number[];
-}
 
 const rnd = seeded(42);
 const series = (n: number, base: number, jitter: number) =>
@@ -97,7 +107,7 @@ export const TOKEN_BY_PROVIDER = [
 /* --------------------------------------------------------------- 成本分析 */
 
 /** 模型单价（元 / 百万 token） */
-export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+export const MODEL_PRICING: Record<string, ModelPricing> = {
   "deepseek-v3": { input: 1, output: 2 },
   "deepseek-r1": { input: 4, output: 16 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
@@ -107,15 +117,6 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   "claude-3.5-sonnet": { input: 3, output: 15 },
 };
 
-export interface CostByModel {
-  model: string;
-  provider: string;
-  tokensIn: number;
-  tokensOut: number;
-  cost: number;
-  calls: number;
-}
-
 export const COST_BY_MODEL: CostByModel[] = [
   { model: "deepseek-v3", provider: "DeepSeek", tokensIn: 1_200_000, tokensOut: 620_400, cost: 24.41, calls: 1280 },
   { model: "gpt-4o-mini", provider: "OpenAI", tokensIn: 680_000, tokensOut: 260_200, cost: 2.58, calls: 845 },
@@ -124,15 +125,6 @@ export const COST_BY_MODEL: CostByModel[] = [
   { model: "claude-3.5-sonnet", provider: "Anthropic", tokensIn: 100_000, tokensOut: 48_600, cost: 1.03, calls: 42 },
   { model: "gpt-4o", provider: "OpenAI", tokensIn: 60_000, tokensOut: 22_000, cost: 0.63, calls: 28 },
 ];
-
-export interface CostByWorkflow {
-  id: number;
-  name: string;
-  cost: number;
-  tasks: number;
-  avgCost: number;
-  trend: number;
-}
 
 export const COST_BY_WORKFLOW: CostByWorkflow[] = [
   { id: 1, name: "技术分析工作流", cost: 12.8, tasks: 420, avgCost: 0.03, trend: 12.4 },
@@ -154,15 +146,6 @@ const costRand = seeded(42);
 export const COST_TREND = Array.from({ length: 14 }, () => +(1.5 + costRand() * 2.5).toFixed(2));
 
 /* ------------------------------------------------------------------ 活动流 */
-export type ActivityKind = "task" | "node" | "system" | "error";
-
-export interface ActivityItem {
-  id: string;
-  at: string;
-  kind: ActivityKind;
-  text: string;
-  meta?: string;
-}
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -179,20 +162,6 @@ export const ACTIVITY: ActivityItem[] = [
 ];
 
 /* ------------------------------------------------------------------ 工作流 */
-export interface WorkflowSummary {
-  id: number;
-  name: string;
-  description: string;
-  status: "published" | "draft";
-  nodeCount: number;
-  edgeCount: number;
-  runs: number;
-  successRate: number;
-  updatedAt: string;
-  /** 缩略图节点位置（0–100 的相对坐标） */
-  mini: { id: string; x: number; y: number }[];
-  miniEdges: [string, string][];
-}
 
 export const WORKFLOWS: WorkflowSummary[] = [
   {
@@ -204,6 +173,7 @@ export const WORKFLOWS: WorkflowSummary[] = [
     edgeCount: 7,
     runs: 482,
     successRate: 98.8,
+    avgDurationMs: 2302,
     updatedAt: ago(12),
     mini: [
       { id: "parse", x: 8, y: 50 },
@@ -232,6 +202,7 @@ export const WORKFLOWS: WorkflowSummary[] = [
     edgeCount: 3,
     runs: 1206,
     successRate: 99.4,
+    avgDurationMs: 1210,
     updatedAt: ago(48),
     mini: [
       { id: "q", x: 10, y: 50 },
@@ -254,6 +225,7 @@ export const WORKFLOWS: WorkflowSummary[] = [
     edgeCount: 7,
     runs: 156,
     successRate: 96.2,
+    avgDurationMs: 3180,
     updatedAt: ago(120),
     mini: [
       { id: "in", x: 8, y: 50 },
@@ -282,6 +254,7 @@ export const WORKFLOWS: WorkflowSummary[] = [
     edgeCount: 5,
     runs: 62,
     successRate: 100,
+    avgDurationMs: 640,
     updatedAt: ago(320),
     mini: [
       { id: "t", x: 10, y: 50 },
@@ -298,35 +271,6 @@ export const WORKFLOWS: WorkflowSummary[] = [
 ];
 
 /* ------------------------------------------------------------------ 任务 */
-export type NodeStatus =
-  | "succeeded"
-  | "running"
-  | "failed"
-  | "pending"
-  | "skipped"
-  | "cancelled";
-
-export interface TaskNodeRow {
-  key: string;
-  type: "input" | "llm" | "rag" | "tool" | "output";
-  status: NodeStatus;
-  durationMs: number;
-  tokensIn: number;
-  tokensOut: number;
-  message?: string;
-}
-
-export interface TaskRow {
-  id: number;
-  workflow: string;
-  workflowId: number;
-  status: NodeStatus;
-  durationMs: number;
-  tokens: number;
-  startedAt: string;
-  input: string;
-  nodes: TaskNodeRow[];
-}
 
 export const NODE_SETS: Record<number, TaskNodeRow[]> = {
   1: [
@@ -435,21 +379,6 @@ export const TASKS: TaskRow[] = [
 ];
 
 /* ------------------------------------------------------------------ 知识库 */
-export interface KbDoc {
-  id: number;
-  filename: string;
-  status: "indexed" | "indexing" | "failed";
-  chunks: number;
-  sizeKb: number;
-  createdAt: string;
-}
-
-export interface KnowledgeBase {
-  id: number;
-  name: string;
-  description: string;
-  docs: KbDoc[];
-}
 
 export const KNOWLEDGE_BASES: KnowledgeBase[] = [
   {
@@ -473,14 +402,7 @@ export const KNOWLEDGE_BASES: KnowledgeBase[] = [
   },
 ];
 
-export interface RetrieveHit {
-  id: number;
-  content: string;
-  score: number;
-  source: string;
-}
-
-export const RETRIEVE_HITS: RetrieveHit[] = [
+export const RETRIEVE_HITS: RetrievalHit[] = [
   {
     id: 1,
     content:
@@ -505,21 +427,6 @@ export const RETRIEVE_HITS: RetrieveHit[] = [
 ];
 
 /* ------------------------------------------------------------------ Provider */
-export interface ProviderModel {
-  name: string;
-  maxTokens: number;
-}
-
-export interface Provider {
-  id: number;
-  name: string;
-  baseUrl: string;
-  status: "enabled" | "degraded" | "disabled";
-  priority: number;
-  latencyMs: number;
-  isDefault: boolean;
-  models: ProviderModel[];
-}
 
 export const PROVIDERS: Provider[] = [
   {
@@ -576,98 +483,108 @@ export const PROVIDERS: Provider[] = [
 ];
 
 /* ------------------------------------------------------------------ 编辑器 */
-export interface EditorNode {
-  id: string;
-  type: "input" | "llm" | "rag" | "tool" | "output";
-  x: number;
-  y: number;
-  config: {
-    model?: string;
-    prompt?: string;
-    system?: string;
-    tool?: string;
-    knowledgeBaseId?: number;
-    maxRetry?: number;
-    timeoutSec?: number;
-  };
-}
+
+export const EDITOR_NODES: EditorNode[] = [
+  { id: "parse", type: "input", x: 20, y: 170, config: {} },
+  {
+    id: "rag",
+    type: "rag",
+    x: 230,
+    y: 20,
+    config: { knowledgeBaseId: 1, prompt: "检索平台架构资料" },
+  },
+  {
+    id: "analyst",
+    type: "llm",
+    x: 230,
+    y: 170,
+    config: {
+      model: "deepseek-v3",
+      prompt: "分析输入内容",
+      system: "你是资深架构师，回答要具体到实现细节。",
+      maxRetry: 2,
+      timeoutSec: 60,
+    },
+  },
+  { id: "clock", type: "tool", x: 230, y: 320, config: { tool: "time" } },
+  {
+    id: "writer",
+    type: "llm",
+    x: 440,
+    y: 170,
+    config: { model: "deepseek-v3", prompt: "汇总成技术报告" },
+  },
+  { id: "out", type: "output", x: 650, y: 170, config: {} },
+];
+
+export const EDITOR_EDGES: [string, string][] = [
+  ["parse", "rag"],
+  ["parse", "analyst"],
+  ["parse", "clock"],
+  ["rag", "writer"],
+  ["analyst", "writer"],
+  ["clock", "writer"],
+  ["writer", "out"],
+];
 
 /* ------------------------------------------------------------------ Agent */
-export type AgentRuntimeType = "native" | "langchain" | "http";
-export type AgentStatus = "active" | "inactive" | "error";
-
-export interface Agent {
-  id: number;
-  user_id: number;
-  name: string;
-  description: string;
-  runtime_type: AgentRuntimeType;
-  endpoint?: string;
-  model?: string;
-  capabilities: string[];
-  status: AgentStatus;
-  version: string;
-  timeout_sec: number;
-  created_at: string;
-  updated_at: string;
-}
 
 export const AGENTS: Agent[] = [
   {
     id: 1,
-    user_id: 1,
+    userId: 1,
     name: "代码评审专家",
     description: "基于 deepseek-r1 的深度代码分析 Agent，擅长发现隐藏的性能与安全问题。",
-    runtime_type: "native",
+    runtimeType: "native",
     model: "deepseek-r1",
     capabilities: ["代码审查", "性能优化", "安全审计", "重构建议"],
     status: "active",
     version: "1.2.0",
-    timeout_sec: 120,
-    created_at: ago(60 * 24 * 7),
-    updated_at: ago(60 * 24 * 2),
+    timeoutSec: 120,
+    createdAt: ago(60 * 24 * 7),
+    updatedAt: ago(60 * 24 * 2),
   },
   {
     id: 2,
-    user_id: 1,
+    userId: 1,
     name: "文档摘要助手",
     description: "快速处理长文档，提取核心观点与行动项，支持多格式输入。",
-    runtime_type: "langchain",
+    runtimeType: "langchain",
     model: "gpt-4o-mini",
     capabilities: ["文档摘要", "信息提取", "多格式支持", "结构化输出"],
     status: "active",
     version: "2.0.1",
-    timeout_sec: 60,
-    created_at: ago(60 * 24 * 14),
-    updated_at: ago(60 * 24 * 1),
+    timeoutSec: 60,
+    createdAt: ago(60 * 24 * 14),
+    updatedAt: ago(60 * 24 * 1),
   },
   {
     id: 3,
-    user_id: 1,
+    userId: 1,
     name: "数据分析师",
     description: "HTTP 服务型 Agent，连接内部数据平台，提供 SQL 查询与可视化建议。",
-    runtime_type: "http",
+    runtimeType: "http",
     endpoint: "https://agents.internal.example.com/analyst",
     capabilities: ["SQL 生成", "数据分析", "图表建议", "趋势预测"],
     status: "inactive",
     version: "0.9.3",
-    timeout_sec: 180,
-    created_at: ago(60 * 24 * 30),
-    updated_at: ago(60 * 24 * 5),
+    timeoutSec: 180,
+    createdAt: ago(60 * 24 * 30),
+    updatedAt: ago(60 * 24 * 5),
   },
   {
     id: 4,
-    user_id: 1,
+    userId: 1,
     name: "翻译专员",
     description: "专业级中英互译 Agent，保留技术术语准确性，支持批量翻译。",
-    runtime_type: "native",
+    runtimeType: "native",
     model: "glm-4-plus",
     capabilities: ["中英互译", "技术术语", "批量处理", "格式保留"],
     status: "error",
     version: "1.0.0",
-    timeout_sec: 30,
-    created_at: ago(60 * 24 * 20),
-    updated_at: ago(60 * 12),
+    timeoutSec: 30,
+    createdAt: ago(60 * 24 * 20),
+    updatedAt: ago(60 * 12),
   },
 ];
 
@@ -675,173 +592,49 @@ export const MARKETPLACE_AGENTS: Agent[] = [
   ...AGENTS.map((a) => ({ ...a })),
   {
     id: 101,
-    user_id: 0,
+    userId: 0,
     name: "产品需求拆解",
     description: "将模糊的产品想法拆解为结构化的 PRD 文档，包含用户故事与验收标准。",
-    runtime_type: "langchain",
+    runtimeType: "langchain",
     model: "gpt-4o",
     capabilities: ["需求分析", "PRD 生成", "用户故事", "验收标准"],
     status: "active",
     version: "1.5.0",
-    timeout_sec: 90,
-    created_at: ago(60 * 24 * 60),
-    updated_at: ago(60 * 24 * 3),
+    timeoutSec: 90,
+    createdAt: ago(60 * 24 * 60),
+    updatedAt: ago(60 * 24 * 3),
   },
   {
     id: 102,
-    user_id: 0,
+    userId: 0,
     name: "测试用例生成器",
     description: "根据代码或需求自动生成全面的测试用例，覆盖边界条件与异常路径。",
-    runtime_type: "native",
+    runtimeType: "native",
     model: "deepseek-v3",
     capabilities: ["单元测试", "集成测试", "边界用例", "代码覆盖率"],
     status: "active",
     version: "2.1.0",
-    timeout_sec: 120,
-    created_at: ago(60 * 24 * 45),
-    updated_at: ago(60 * 24 * 7),
+    timeoutSec: 120,
+    createdAt: ago(60 * 24 * 45),
+    updatedAt: ago(60 * 24 * 7),
   },
   {
     id: 103,
-    user_id: 0,
+    userId: 0,
     name: "客服机器人",
     description: "HTTP 接入的智能客服 Agent，支持多轮对话与工单自动创建。",
-    runtime_type: "http",
+    runtimeType: "http",
     endpoint: "https://service-agents.example.com/customer-bot",
     capabilities: ["多轮对话", "FAQ 问答", "工单创建", "情绪识别"],
     status: "active",
     version: "3.0.0",
-    timeout_sec: 60,
-    created_at: ago(60 * 24 * 90),
-    updated_at: ago(60 * 24 * 1),
+    timeoutSec: 60,
+    createdAt: ago(60 * 24 * 90),
+    updatedAt: ago(60 * 24 * 1),
   },
 ];
 
 /* --------------------------------------------------------- Prompt 模板 */
-
-export interface PromptTemplate {
-  id: string;
-  name: string;
-  category: "通用" | "分析" | "写作" | "翻译" | "代码";
-  prompt: string;
-  system?: string;
-}
-
-/* ---------------------------------------------------------- 工作流模板 */
-
-export interface WorkflowTemplate {
-  id: number;
-  name: string;
-  description: string;
-  category: string;
-  icon?: string;
-  nodes: number;
-  used_count: number;
-  created_at: string;
-}
-
-export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
-  {
-    id: 1,
-    name: "智能文章写作助手",
-    description: "输入主题和关键词，自动生成结构完整、逻辑清晰的专业文章，支持多种文风调整。",
-    category: "内容创作",
-    icon: "📝",
-    nodes: 5,
-    used_count: 1284,
-    created_at: "2024-10-15T08:00:00Z",
-  },
-  {
-    id: 2,
-    name: "社交媒体内容生成",
-    description: "一键生成小红书、微博、公众号等多平台文案，自动适配各平台风格与字数限制。",
-    category: "内容创作",
-    icon: "📱",
-    nodes: 4,
-    used_count: 956,
-    created_at: "2024-11-02T10:30:00Z",
-  },
-  {
-    id: 3,
-    name: "销售数据洞察分析",
-    description: "上传销售报表，自动识别趋势异常、计算同比环比、生成可视化分析报告。",
-    category: "数据分析",
-    icon: "📊",
-    nodes: 6,
-    used_count: 2103,
-    created_at: "2024-09-20T14:00:00Z",
-  },
-  {
-    id: 4,
-    name: "用户反馈情感分析",
-    description: "批量处理用户评论和反馈，自动分类情感倾向，提取关键词和改进建议。",
-    category: "客户服务",
-    icon: "💬",
-    nodes: 5,
-    used_count: 1567,
-    created_at: "2024-10-08T09:15:00Z",
-  },
-  {
-    id: 5,
-    name: "智能客服工单处理",
-    description: "自动分类客户工单、提取关键信息、生成标准回复建议，大幅提升客服效率。",
-    category: "客户服务",
-    icon: "🎧",
-    nodes: 7,
-    used_count: 3421,
-    created_at: "2024-08-25T11:45:00Z",
-  },
-  {
-    id: 6,
-    name: "代码审查自动化",
-    description: "自动扫描代码变更，检测潜在 Bug、性能问题和安全漏洞，生成审查报告。",
-    category: "研发提效",
-    icon: "🔍",
-    nodes: 6,
-    used_count: 1876,
-    created_at: "2024-11-10T16:20:00Z",
-  },
-  {
-    id: 7,
-    name: "API 文档自动生成",
-    description: "解析代码注释和类型定义，自动生成结构化的 API 文档，支持多种输出格式。",
-    category: "研发提效",
-    icon: "📚",
-    nodes: 4,
-    used_count: 892,
-    created_at: "2024-12-01T08:30:00Z",
-  },
-  {
-    id: 8,
-    name: "智能题库生成器",
-    description: "根据知识点和难度要求，自动生成选择题、判断题、简答题等多种题型的试卷。",
-    category: "教育学习",
-    icon: "📖",
-    nodes: 5,
-    used_count: 2345,
-    created_at: "2024-09-15T13:00:00Z",
-  },
-  {
-    id: 9,
-    name: "外语学习助手",
-    description: "智能生成词汇练习、语法讲解、情景对话和写作批改，个性化提升语言能力。",
-    category: "教育学习",
-    icon: "🌍",
-    nodes: 6,
-    used_count: 1678,
-    created_at: "2024-10-28T10:00:00Z",
-  },
-  {
-    id: 10,
-    name: "财务报表智能分析",
-    description: "上传财务数据，自动生成利润分析、现金流预测、风险评估等多维度分析报告。",
-    category: "数据分析",
-    icon: "💰",
-    nodes: 7,
-    used_count: 1123,
-    created_at: "2024-11-20T15:30:00Z",
-  },
-];
 
 export const PROMPT_TEMPLATES: PromptTemplate[] = [
   {
@@ -889,47 +682,107 @@ export const PROMPT_TEMPLATES: PromptTemplate[] = [
   },
 ];
 
-// 编辑器初始布局。坐标刻意排得紧凑（列距 210 / 行距 150）：
-// 画布在 1440 视口下只有约 700px 可用宽，图越宽 fitView 缩得越狠、字越小。
-export const EDITOR_NODES: EditorNode[] = [
-  { id: "parse", type: "input", x: 20, y: 170, config: {} },
-  {
-    id: "rag",
-    type: "rag",
-    x: 230,
-    y: 20,
-    config: { knowledgeBaseId: 1, prompt: "检索平台架构资料" },
-  },
-  {
-    id: "analyst",
-    type: "llm",
-    x: 230,
-    y: 170,
-    config: {
-      model: "deepseek-v3",
-      prompt: "分析输入内容",
-      system: "你是资深架构师，回答要具体到实现细节。",
-      maxRetry: 2,
-      timeoutSec: 60,
-    },
-  },
-  { id: "clock", type: "tool", x: 230, y: 320, config: { tool: "time" } },
-  {
-    id: "writer",
-    type: "llm",
-    x: 440,
-    y: 170,
-    config: { model: "deepseek-v3", prompt: "汇总成技术报告" },
-  },
-  { id: "out", type: "output", x: 650, y: 170, config: {} },
-];
+/* ---------------------------------------------------------- 工作流模板 */
 
-export const EDITOR_EDGES: [string, string][] = [
-  ["parse", "rag"],
-  ["parse", "analyst"],
-  ["parse", "clock"],
-  ["rag", "writer"],
-  ["analyst", "writer"],
-  ["clock", "writer"],
-  ["writer", "out"],
+export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
+  {
+    id: 1,
+    name: "智能文章写作助手",
+    description: "输入主题和关键词，自动生成结构完整、逻辑清晰的专业文章，支持多种文风调整。",
+    category: "内容创作",
+    icon: "📝",
+    nodes: 5,
+    usedCount: 1284,
+    createdAt: "2024-10-15T08:00:00Z",
+  },
+  {
+    id: 2,
+    name: "社交媒体内容生成",
+    description: "一键生成小红书、微博、公众号等多平台文案，自动适配各平台风格与字数限制。",
+    category: "内容创作",
+    icon: "📱",
+    nodes: 4,
+    usedCount: 956,
+    createdAt: "2024-11-02T10:30:00Z",
+  },
+  {
+    id: 3,
+    name: "销售数据洞察分析",
+    description: "上传销售报表，自动识别趋势异常、计算同比环比、生成可视化分析报告。",
+    category: "数据分析",
+    icon: "📊",
+    nodes: 6,
+    usedCount: 2103,
+    createdAt: "2024-09-20T14:00:00Z",
+  },
+  {
+    id: 4,
+    name: "用户反馈情感分析",
+    description: "批量处理用户评论和反馈，自动分类情感倾向，提取关键词和改进建议。",
+    category: "客户服务",
+    icon: "💬",
+    nodes: 5,
+    usedCount: 1567,
+    createdAt: "2024-10-08T09:15:00Z",
+  },
+  {
+    id: 5,
+    name: "智能客服工单处理",
+    description: "自动分类客户工单、提取关键信息、生成标准回复建议，大幅提升客服效率。",
+    category: "客户服务",
+    icon: "🎧",
+    nodes: 7,
+    usedCount: 3421,
+    createdAt: "2024-08-25T11:45:00Z",
+  },
+  {
+    id: 6,
+    name: "代码审查自动化",
+    description: "自动扫描代码变更，检测潜在 Bug、性能问题和安全漏洞，生成审查报告。",
+    category: "研发提效",
+    icon: "🔍",
+    nodes: 6,
+    usedCount: 1876,
+    createdAt: "2024-11-10T16:20:00Z",
+  },
+  {
+    id: 7,
+    name: "API 文档自动生成",
+    description: "解析代码注释和类型定义，自动生成结构化的 API 文档，支持多种输出格式。",
+    category: "研发提效",
+    icon: "📚",
+    nodes: 4,
+    usedCount: 892,
+    createdAt: "2024-12-01T08:30:00Z",
+  },
+  {
+    id: 8,
+    name: "智能题库生成器",
+    description: "根据知识点和难度要求，自动生成选择题、判断题、简答题等多种题型的试卷。",
+    category: "教育学习",
+    icon: "📖",
+    nodes: 5,
+    usedCount: 2345,
+    createdAt: "2024-09-15T13:00:00Z",
+  },
+  {
+    id: 9,
+    name: "外语学习助手",
+    description: "智能生成词汇练习、语法讲解、情景对话和写作批改，个性化提升语言能力。",
+    category: "教育学习",
+    icon: "🌍",
+    nodes: 6,
+    usedCount: 1678,
+    createdAt: "2024-10-28T10:00:00Z",
+  },
+  {
+    id: 10,
+    name: "财务报表智能分析",
+    description: "上传财务数据，自动生成利润分析、现金流预测、风险评估等多维度分析报告。",
+    category: "数据分析",
+    icon: "💰",
+    nodes: 7,
+    usedCount: 1123,
+    createdAt: "2024-11-20T15:30:00Z",
+  },
 ];

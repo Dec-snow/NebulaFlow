@@ -374,7 +374,8 @@ func (p *parser) parseFactor() (float64, error) {
 // ---------- HTTP Request ----------
 
 type HTTPTool struct {
-	client *http.Client
+	client          *http.Client
+	disableSafeguard bool // 仅供测试使用，跳过 SSRF 防护
 }
 
 func NewHTTPTool() *HTTPTool {
@@ -408,6 +409,11 @@ func (t *HTTPTool) Call(ctx context.Context, arg string) (string, error) {
 			return "", errors.New("http_request: 需要 url")
 		}
 		req.Method = "GET"
+	}
+	if !t.disableSafeguard {
+		if err := isURLAllowed(req.URL); err != nil {
+			return "", err
+		}
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, req.Method, req.URL, nil)
 	if err != nil {

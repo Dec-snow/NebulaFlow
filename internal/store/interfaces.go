@@ -23,6 +23,9 @@ type UserStore interface {
 	CreateUser(ctx context.Context, u *model.User) error
 	GetUserByUsername(ctx context.Context, username string) (*model.User, error)
 	GetUserByID(ctx context.Context, id int64) (*model.User, error)
+	GetUserRole(ctx context.Context, userID int64) (string, error)
+	SetUserRole(ctx context.Context, userID int64, role string) error
+	CountUsers(ctx context.Context) (int64, error)
 }
 
 // WorkflowStore 工作流仓储（含节点与边）。
@@ -37,8 +40,10 @@ type WorkflowStore interface {
 	// 模板相关
 	// ListTemplates 列出所有系统模板 + 用户自己的模板，可按分类过滤。
 	ListTemplates(ctx context.Context, userID int64, category string) ([]model.Workflow, error)
-	// GetTemplate 获取模板详情（系统模板所有人可见）。
-	GetTemplate(ctx context.Context, id int64) (*model.Workflow, error)
+	// ListTemplateCategories 返回用户可见模板的去重分类列表（SELECT DISTINCT）。
+	ListTemplateCategories(ctx context.Context, userID int64) ([]string, error)
+	// GetTemplate 获取模板详情（系统模板 + 自己的模板可见）。
+	GetTemplate(ctx context.Context, id, userID int64) (*model.Workflow, error)
 	// CreateFromTemplate 从模板复制一个新工作流到目标用户。
 	CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error)
 }
@@ -76,6 +81,10 @@ type KnowledgeStore interface {
 	ListDocuments(ctx context.Context, kbID int64) ([]model.Document, error)
 	GetDocument(ctx context.Context, docID int64) (*model.Document, error)
 	UpdateDocumentStatus(ctx context.Context, docID int64, status model.DocumentStatus) error
+	// UpdateDocumentIndexResult 更新文档索引结果：状态、分块数、大小、错误信息。
+	// 索引成功时 status=indexed，chunks/sizeKb 写入，errorMsg 为空；
+	// 索引失败时 status=failed，errorMsg 写入，chunks/sizeKb 为 0。
+	UpdateDocumentIndexResult(ctx context.Context, docID int64, status model.DocumentStatus, chunks, sizeKb int, errorMsg string) error
 
 	DeleteChunksByDocument(ctx context.Context, docID int64) error
 	InsertChunk(ctx context.Context, c *model.DocumentChunk) error

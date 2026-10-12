@@ -1,0 +1,52 @@
+# NebulaFlow 告警规则
+# 覆盖四类核心场景：服务可用性、队列水位、HTTP 错误率、LLM 调用失败率
+groups:
+  - name: nebulaflow_alerts
+    rules:
+      # ---------- 服务可用性 ----------
+      - alert: NebulaFlowServiceDown
+        expr: up{job="nebulaflow"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NebulaFlow 服务不可用"
+          description: "实例 {{ $labels.instance }} 已宕机超过 1 分钟，当前 up = {{ $value }}"
+
+      # ---------- 队列水位 ----------
+      - alert: QueueHighWatermark
+        expr: nebulaflow_queue_stream_len / nebulaflow_queue_max_len > 0.9
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "任务队列水位超过 90%"
+          description: "队列物理长度 {{ $value | humanizePercentage }} 已超过容量的 90%，背压可能已失效，即将触发 MAXLEN 静默裁剪。stream_len={{ printf \"%.0f\" $values.nebulaflow_queue_stream_len }}, max_len={{ printf \"%.0f\" $values.nebulaflow_queue_max_len }}"
+
+      # ---------- HTTP 错误率 ----------
+      - alert: HighHTTPErrorRate
+        expr: |
+          sum(rate(nebulaflow_http_requests_total{status=~"5xx"}[2m]))
+          /
+          sum(rate(nebulaflow_http_requests_total[2m]))
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP 错误率超过 5%"
+          description: "过去 2 分钟内 5xx 错误率为 {{ $value | humanizePercentage }}，超过 5% 阈值"
+
+      # ---------- LLM 调用失败率 ----------
+      - alert: HighLLMFailureRate
+        expr: |
+          sum(rate(nebulaflow_llm_requests_total{result="error"}[5m]))
+          /
+          sum(rate(nebulaflow_llm_requests_total[5m]))
+          > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM 调用失败率超过 10%"
+          description: "过去 5 分钟内 LLM 调用失败率为 {{ $value | humanizePercentage }}，超过 10% 阈值，请检查 Provider 可用性与配额"

@@ -15,16 +15,14 @@ import {
   Button,
   Card,
   CardHeader,
+  ErrorState,
   MiniStat,
+  PageLoader,
   Segmented,
   Stat,
 } from "@/components/ui";
-import {
-  COST_BY_MODEL,
-  COST_BY_WORKFLOW,
-  COST_TREND,
-  COST_TREND_LABELS,
-} from "@/lib/mock";
+import { api } from "@/api";
+import { useFetch } from "@/hooks";
 import { cn } from "@/lib/utils";
 
 const TONE_MAP: Record<string, string> = {
@@ -37,12 +35,20 @@ const TONE_MAP: Record<string, string> = {
 export default function CostAnalysis() {
   const [range, setRange] = useState<"7d" | "30d" | "90d">("30d");
 
-  const totalCost = COST_BY_MODEL.reduce((sum, m) => sum + m.cost, 0);
-  const totalTokens = COST_BY_MODEL.reduce((sum, m) => sum + m.tokensIn + m.tokensOut, 0);
-  const totalCalls = COST_BY_MODEL.reduce((sum, m) => sum + m.calls, 0);
-  const avgCostPerTask = totalCost / COST_BY_WORKFLOW.reduce((s, w) => s + w.tasks, 0);
+  const { data, loading, error, refresh } = useFetch(() => api.cost.get(range), [range]);
 
-  const modelCostItems = COST_BY_MODEL.map((m) => ({
+  if (loading || !data) return <PageLoader text="加载成本分析…" />;
+
+  if (error) return <ErrorState title="加载成本分析失败" description={error.message} onRetry={refresh} />;
+
+  const { byModel, byWorkflow, trend, trendLabels } = data;
+
+  const totalCost = byModel.reduce((sum, m) => sum + m.cost, 0);
+  const totalTokens = byModel.reduce((sum, m) => sum + m.tokensIn + m.tokensOut, 0);
+  const totalCalls = byModel.reduce((sum, m) => sum + m.calls, 0);
+  const avgCostPerTask = totalCost / byWorkflow.reduce((s, w) => s + w.tasks, 0);
+
+  const modelCostItems = byModel.map((m) => ({
     label: m.model,
     value: m.cost,
     tone: (TONE_MAP[m.provider] ?? "brand") as "brand" | "mint" | "sky" | "violet",
@@ -81,7 +87,7 @@ export default function CostAnalysis() {
           value={`¥${totalCost.toFixed(2)}`}
           delta={8.3}
           deltaGood="down"
-          spark={COST_TREND.slice(-12)}
+          spark={trend.slice(-12)}
           sparkTone="brand"
           icon={<DollarSign size={13} />}
         />
@@ -121,7 +127,7 @@ export default function CostAnalysis() {
             subtitle="每日总费用（元）"
             action={<Badge tone="brand">近 14 天</Badge>}
           />
-          <AreaChart data={COST_TREND} labels={COST_TREND_LABELS} tone="brand" />
+          <AreaChart data={trend} labels={trendLabels} tone="brand" />
         </Card>
 
         <Card>
@@ -158,7 +164,7 @@ export default function CostAnalysis() {
               </tr>
             </thead>
             <tbody>
-              {COST_BY_MODEL.map((m) => (
+              {byModel.map((m) => (
                 <tr
                   key={m.model}
                   className="border-b border-line/60 transition-colors hover:bg-surface-2"
@@ -200,7 +206,7 @@ export default function CostAnalysis() {
         </div>
 
         <div className="px-2 pb-2">
-          {COST_BY_WORKFLOW.map((w) => (
+          {byWorkflow.map((w) => (
             <div
               key={w.id}
               className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"

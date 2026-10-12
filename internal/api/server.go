@@ -28,6 +28,7 @@ type Server struct {
 	auth        *auth.Service
 	tasks       *task.Service
 	rag         *rag.Service
+	indexer     *rag.Indexer
 	llm         *llm.Gateway
 	embed       *llm.EmbeddingGateway
 	queue       queue.Queue
@@ -44,13 +45,13 @@ type Server struct {
 
 func NewServer(
 	st *store.Store, authSvc *auth.Service, taskSvc *task.Service,
-	ragSvc *rag.Service, gateway *llm.Gateway, embedder *llm.EmbeddingGateway,
+	ragSvc *rag.Service, indexer *rag.Indexer, gateway *llm.Gateway, embedder *llm.EmbeddingGateway,
 	q queue.Queue, pool *worker.WorkerPool, metrics *observability.Metrics,
 	limiter ratelimit.Limiter, reg prometheus.Gatherer, tp *tracing.Provider, cfg *Config,
 ) *Server {
 	resolved := cfg.withDefaults()
 	return &Server{
-		store: st, auth: authSvc, tasks: taskSvc, rag: ragSvc, llm: gateway,
+		store: st, auth: authSvc, tasks: taskSvc, rag: ragSvc, indexer: indexer, llm: gateway,
 		embed: embedder, queue: q, pool: pool, metrics: metrics,
 		limiter: limiter, reg: reg, tracing: tp, cfg: resolved,
 	}
@@ -148,7 +149,7 @@ func (s *Server) Router() *gin.Engine {
 	authH := &authHandler{svc: s.auth}
 	workflowH := &workflowHandler{store: s.store}
 	taskH := &taskHandler{svc: s.tasks, limit: cfg.TaskRateLimitPerMin, metrics: s.metrics}
-	kbH := &knowledgeHandler{store: s.store, rag: s.rag}
+	kbH := &knowledgeHandler{store: s.store, rag: s.rag, indexer: s.indexer}
 	providerH := &providerHandler{store: s.store}
 	traceH := &traceHandler{svc: s.tasks, tracing: s.tracing}
 	dashH := &dashboardHandler{metrics: s.metrics, queue: s.queue, pool: s.pool,
@@ -202,11 +203,17 @@ func (s *Server) Router() *gin.Engine {
 		api.GET("/knowledge-bases/:id/retrieve", kbH.retrieve)
 
 		// LLM Providers
+		// GET 所有登录用户可访问（返回的 API key 已掩码）；
+		// POST/PUT/DELETE 仅限 admin 角色（Provider 是系统级配置）。
 		api.GET("/providers", providerH.list)
-		api.POST("/providers", providerH.create)
-		api.PUT("/providers/:id", providerH.update)
-		api.DELETE("/providers/:id", providerH.delete)
-		api.POST("/providers/:id/models", providerH.addModel)
+		{
+			admin := api.Group("")
+			admin.Use(adminMiddleware(s.auth))
+			admin.POST("/providers", providerH.create)
+			admin.PUT("/providers/:id", providerH.update)
+			admin.DELETE("/providers/:id", providerH.delete)
+			admin.POST("/providers/:id/models", providerH.addModel)
+		}
 
 		// Dashboard
 		api.GET("/dashboard/stats", dashH.stats)

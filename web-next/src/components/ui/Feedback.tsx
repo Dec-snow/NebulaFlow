@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { CheckCircle2, X } from "lucide-react";
+import { CheckCircle2, Info, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ 空状态 */
@@ -145,21 +145,31 @@ const TOAST_TONE: Record<NonNullable<ToastItem["tone"]>, string> = {
   info: "bg-sky/10 text-sky border-sky/30",
 };
 
+const TOAST_ICON: Record<NonNullable<ToastItem["tone"]>, typeof CheckCircle2> = {
+  success: CheckCircle2,
+  error: XCircle,
+  info: Info,
+};
+
 export function ToastContainer({ toasts }: { toasts: ToastItem[] }) {
   return (
     <div className="pointer-events-none fixed right-6 top-6 z-50 flex flex-col gap-2">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={cn(
-            "pointer-events-auto flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs font-medium shadow-lg backdrop-blur",
-            TOAST_TONE[t.tone ?? "success"],
-          )}
-        >
-          <CheckCircle2 size={15} />
-          <span>{t.message}</span>
-        </div>
-      ))}
+      {toasts.map((t) => {
+        const tone = t.tone ?? "success";
+        const Icon = TOAST_ICON[tone];
+        return (
+          <div
+            key={t.id}
+            className={cn(
+              "pointer-events-auto flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-xs font-medium shadow-lg backdrop-blur",
+              TOAST_TONE[tone],
+            )}
+          >
+            <Icon size={15} />
+            <span>{t.message}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

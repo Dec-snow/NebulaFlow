@@ -73,6 +73,29 @@ func (f *fakeStore) GetUserByID(_ context.Context, id int64) (*model.User, error
 	return nil, store.ErrUserNotFound
 }
 
+func (f *fakeStore) GetUserRole(_ context.Context, userID int64) (string, error) {
+	for _, u := range f.users {
+		if u.ID == userID {
+			return u.Role, nil
+		}
+	}
+	return "", store.ErrUserNotFound
+}
+
+func (f *fakeStore) SetUserRole(_ context.Context, userID int64, role string) error {
+	for _, u := range f.users {
+		if u.ID == userID {
+			u.Role = role
+			return nil
+		}
+	}
+	return store.ErrUserNotFound
+}
+
+func (f *fakeStore) CountUsers(_ context.Context) (int64, error) {
+	return int64(len(f.users)), nil
+}
+
 const testSecret = "0123456789abcdef0123456789abcdef"
 
 func newTestService(f *fakeStore) *Service {
@@ -505,5 +528,155 @@ func TestIssueSetsClaims(t *testing.T) {
 	want := before.Add(time.Hour)
 	if d := claims.ExpiresAt.Time.Sub(want); d > time.Minute || d < -time.Minute {
 		t.Errorf("ExpiresAt 应约等于 %v，实际 %v", want, claims.ExpiresAt.Time)
+	}
+}
+
+// ---------- 角色与权限 ----------
+
+// 第一个注册的用户必须自动获得 admin 角色，后续注册的默认是 user。
+//
+// 这是一个引导期便利机制：部署后第一个注册的人就是管理员，
+// 避免了"先配置后台再用"的鸡生蛋问题。
+// 后续 admin 可以通过 SetUserRole 把自己降级或授权他人。
+func TestRegisterFirstUserIsAdmin(t *testing.T) {
+	f := newFakeStore()
+	svc := newTestService(f)
+
+	// 第一个用户 → admin
+	u1, err := svc.Register(context.Background(), "alice", "alice@example.com", "password1")
+	if err != nil {
+		t.Fatalf("首次注册应成功: %v", err)
+	}
+	if u1.Role != model.RoleAdmin {
+		t.Fatalf("第一个用户角色应为 %q，实际 %q", model.RoleAdmin, u1.Role)
+	}
+
+	// 第二个用户 → user
+	u2, err := svc.Register(context.Background(), "bob", "bob@example.com", "password2")
+	if err != nil {
+		t.Fatalf("二次注册应成功: %v", err)
+	}
+	if u2.Role != model.RoleUser {
+		t.Fatalf("第二个用户角色应为 %q，实际 %q", model.RoleUser, u2.Role)
+	}
+
+	// 第三个用户 → user
+	u3, err := svc.Register(context.Background(), "carol", "carol@example.com", "password3")
+	if err != nil {
+		t.Fatalf("三次注册应成功: %v", err)
+	}
+	if u3.Role != model.RoleUser {
+		t.Fatalf("第三个用户角色应为 %q，实际 %q", model.RoleUser, u3.Role)
+	}
+}
+
+// RequireAdmin：admin 用户通过校验。
+func TestRequireAdmin_AdminPasses(t *testing.T) {
+	f := newFakeStore()
+	svc := newTestService(f)
+
+	u, err := svc.Register(context.Background(), "alice", "a@example.com", "password1")
+	if err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+	// 第一个用户是 admin
+	if err := svc.RequireAdmin(context.Background(), u.ID); err != nil {
+		t.Fatalf("admin 用户应通过 RequireAdmin，实际: %v", err)
+	}
+}
+
+// RequireAdmin：普通用户被拒绝，返回 ErrInsufficientPermission。
+func TestRequireAdmin_RegularUserDenied(t *testing.T) {
+	f := newFakeStore()
+	svc := newTestService(f)
+
+	// 第一个用户是 admin
+	_, err := svc.Register(context.Background(), "alice", "a@example.com", "password1")
+	if err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+	// 第二个用户是普通用户
+	u2, err := svc.Register(context.Background(), "bob", "b@example.com", "password2")
+	if err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+
+	err = svc.RequireAdmin(context.Background(), u2.ID)
+	if !errors.Is(err, ErrInsufficientPermission) {
+		t.Fatalf("普通用户应返回 ErrInsufficientPermission，实际: %v", err)
+	}
+}
+
+// RequireAdmin：不存在的用户返回底层错误（不是 ErrInsufficientPermission）。
+//
+// 这是一个边界情况：正常流程中 authMiddleware 已经验证了 token（用户存在），
+// 所以 RequireAdmin 通常不会遇到"用户不存在"。但如果 token 签发后用户
+// 被删除、或者调用方绕过了 authMiddleware，这里应该如实上抛错误，
+// 而不是伪装成"权限不足"——两者的故障排查方向完全不同。
+func TestRequireAdmin_NonexistentUserReturnsStoreError(t *testing.T) {
+	svc := newTestService(newFakeStore())
+
+	err := svc.RequireAdmin(context.Background(), 9999)
+	if err == nil {
+		t.Fatal("不存在的用户 RequireAdmin 应返回错误")
+	}
+	// 必须是底层的 ErrUserNotFound，而不是 ErrInsufficientPermission
+	if !errors.Is(err, store.ErrUserNotFound) {
+		t.Fatalf("不存在的用户应返回 store.ErrUserNotFound（被包装），实际: %v", err)
+	}
+	if errors.Is(err, ErrInsufficientPermission) {
+		t.Fatal("不存在的用户不应返回 ErrInsufficientPermission（故障性质不同）")
+	}
+}
+
+// RequireAdmin：被手动降级的 admin 不再能通过校验。
+func TestRequireAdmin_DemotedAdminDenied(t *testing.T) {
+	f := newFakeStore()
+	svc := newTestService(f)
+
+	u, err := svc.Register(context.Background(), "alice", "a@example.com", "password1")
+	if err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+
+	// 降级为普通用户
+	if err := f.SetUserRole(context.Background(), u.ID, model.RoleUser); err != nil {
+		t.Fatalf("SetUserRole 失败: %v", err)
+	}
+
+	// 降级后不再能通过 admin 校验
+	err = svc.RequireAdmin(context.Background(), u.ID)
+	if !errors.Is(err, ErrInsufficientPermission) {
+		t.Fatalf("降级后的 admin 应被拒绝，实际: %v", err)
+	}
+}
+
+// RequireAdmin：普通用户被提升为 admin 后可以通过校验。
+func TestRequireAdmin_PromotedUserPasses(t *testing.T) {
+	f := newFakeStore()
+	svc := newTestService(f)
+
+	// 第一个是 admin（占坑，确保第二个是普通用户）
+	_, err := svc.Register(context.Background(), "alice", "a@example.com", "password1")
+	if err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+
+	u2, err := svc.Register(context.Background(), "bob", "b@example.com", "password2")
+	if err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+	if u2.Role != model.RoleUser {
+		t.Fatalf("第二个用户应为普通用户，实际角色 %q", u2.Role)
+	}
+
+	// 提升为 admin
+	if err := f.SetUserRole(context.Background(), u2.ID, model.RoleAdmin); err != nil {
+		t.Fatalf("SetUserRole 失败: %v", err)
+	}
+
+	// 提升后应能通过校验
+	if err := svc.RequireAdmin(context.Background(), u2.ID); err != nil {
+		t.Fatalf("提升后的用户应通过 RequireAdmin，实际: %v", err)
 	}
 }

@@ -703,7 +703,7 @@ func TestAgentNodeEmitsToolCallAndResultEvents(t *testing.T) {
 	sched, ts, hub := newAgentRig(t, prov, tool.Calculator{})
 	seedRunningTask(ts)
 
-	events, unsub := hub.Subscribe(1)
+	events, unsub, _ := hub.Subscribe(1, 1)
 	defer unsub()
 
 	if _, err := sched.ExecuteNode(context.Background(),

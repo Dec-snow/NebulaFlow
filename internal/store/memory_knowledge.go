@@ -138,6 +138,23 @@ func (r *memKnowledgeRepo) UpdateDocumentStatus(_ context.Context, docID int64, 
 	return nil
 }
 
+func (r *memKnowledgeRepo) UpdateDocumentIndexResult(_ context.Context, docID int64,
+	status model.DocumentStatus, chunks, sizeKb int, errorMsg string) error {
+	m := r.m
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	d, ok := m.docs[docID]
+	if !ok {
+		return ErrDocNotFound
+	}
+	d.Status = status
+	d.Chunks = chunks
+	d.SizeKB = sizeKb
+	d.ErrorMessage = errorMsg
+	return nil
+}
+
 // ---------- 分块 ----------
 
 func (r *memKnowledgeRepo) DeleteChunksByDocument(_ context.Context, docID int64) error {

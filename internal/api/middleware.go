@@ -146,6 +146,27 @@ func getUser(c *gin.Context) *ctxUser {
 	return u
 }
 
+// ---------- admin 权限校验 ----------
+
+// adminMiddleware 校验当前用户是否为 admin 角色。
+// 必须在 authMiddleware 之后执行（依赖 userKey）。
+func adminMiddleware(authSvc *auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		u := getUser(c)
+		if u == nil {
+			// 理论上 authMiddleware 已经保证了用户存在，
+			// 这里做防御性检查，避免中间件顺序配错时出现空指针。
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		if err := authSvc.RequireAdmin(c.Request.Context(), u.ID); err != nil {
+			abortWithError(c, err)
+			return
+		}
+		c.Next()
+	}
+}
+
 // ---------- 限流 ----------
 
 func rateLimitMiddleware(l ratelimit.Limiter, perMin int) gin.HandlerFunc {
@@ -210,6 +231,10 @@ func abortWithError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+	case errors.Is(err, auth.ErrInvalidToken):
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+	case errors.Is(err, auth.ErrInsufficientPermission):
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, store.ErrUserExists):
 		// 必须匹配 store.ErrUserExists，而不是 auth 里某个同名错误：
 		// store.UserRepo 在唯一约束冲突（PG 23505）时返回的就是这一个。
@@ -221,6 +246,12 @@ func abortWithError(c *gin.Context, err error) {
 	case errors.Is(err, task.ErrTaskNotCancellable):
 		// 任务已终态，不是错误也不是服务端故障：409 才是正确语义
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, store.ErrValidation):
+		// 参数校验失败：400 Bad Request
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, task.ErrUserConnectionsExceeded):
+		// 单用户 SSE 连接数超限：429（用户级别的资源限制）
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
 	case errors.Is(err, queue.ErrQueueFull):
 		// 队列接近容量上界（背压）。这是**过载**而不是**故障**：
 		// 503 而不是 500，并带上 Retry-After 告诉调用方退避重试。
@@ -229,6 +260,12 @@ func abortWithError(c *gin.Context, err error) {
 		c.Header("Retry-After", "1")
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
 			"error": "task queue is at capacity, retry later",
+		})
+	case errors.Is(err, task.ErrTooManyConnections):
+		// 全局 SSE 连接数超限：503（服务级容量上限）
+		c.Header("Retry-After", "5")
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"error": "sse connection limit reached, retry later",
 		})
 	default:
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

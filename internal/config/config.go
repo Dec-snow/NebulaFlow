@@ -17,6 +17,9 @@ type Config struct {
 	RedisPassword string
 	JWTSecret     string
 	JWTExpire     time.Duration
+	// EncryptionKey 是 AES-256-GCM 加密密钥（32 字节），用于加密存储 LLM Provider 的 API Key。
+	// 非 dev 环境必须设置；dev 环境可空（降级为明文存储，仅用于本地开发/演示）。
+	EncryptionKey string
 	WorkerCount   int
 	// ConsumerCount 是调度器"消费循环"的并发度（同时执行多少个任务）。
 	// 它与 WorkerCount 是两个独立旋钮：
@@ -50,6 +53,9 @@ type Config struct {
 	//   OpenAI text-embedding-3-large  → 3072
 	// 改这个值会触发一次 ALTER COLUMN TYPE，历史数据需重新索引。
 	EmbedDim            int
+	// IndexConcurrency 是文档索引的并发度，默认 2。
+	// 向量化是 CPU + 外部 API 调用密集型，并发过高会打满 embedding 服务配额。
+	IndexConcurrency    int
 	UseRedisQueue       bool
 	TaskTimeoutSec      int
 	DefaultMaxRetry     int
@@ -126,6 +132,12 @@ type Config struct {
 	// 超出后按 FIFO 淘汰最老的 trace —— 这是有意的丢弃，且有指标可观测。
 	TraceMaxTraces        int
 	TraceMaxSpansPerTrace int
+
+	// MigrateOnStartup 控制服务启动时是否自动执行数据库迁移。
+	// 默认 true（向后兼容）。多实例同时启动时虽然有 advisory lock 保证互斥，
+	// 但生产环境建议关闭，由专门的迁移 job/init-container 统一执行，
+	// 避免多个实例卡在迁移阶段导致滚动更新超时。
+	MigrateOnStartup bool
 }
 
 func FromEnv() *Config {
@@ -137,6 +149,7 @@ func FromEnv() *Config {
 		RedisPassword:         getEnv("REDIS_PASSWORD", ""),
 		JWTSecret:             getEnv("JWT_SECRET", "dev-secret-change-me"),
 		JWTExpire:             time.Duration(getEnvInt("JWT_EXPIRE_HOURS", 72)) * time.Hour,
+		EncryptionKey:         getEnv("ENCRYPTION_KEY", ""),
 		WorkerCount:           getEnvInt("WORKER_COUNT", 20),
 		ConsumerCount:         getEnvInt("CONSUMER_COUNT", 0),
 		QueueName:             getEnv("QUEUE_NAME", "workflow_tasks"),
@@ -144,6 +157,7 @@ func FromEnv() *Config {
 		QueueDLQMaxLen:        int64(getEnvInt("QUEUE_DLQ_MAXLEN", 1000)),
 		QueueAdmitRatio:       getEnvFloat("QUEUE_ADMIT_RATIO", 0.8),
 		EmbedDim:              getEnvInt("EMBED_DIM", 384),
+		IndexConcurrency:      getEnvInt("INDEX_CONCURRENCY", 2),
 		UseRedisQueue:         getEnvBool("USE_REDIS_QUEUE", true),
 		TaskTimeoutSec:        getEnvInt("TASK_TIMEOUT_SEC", 300),
 		DefaultMaxRetry:       getEnvInt("DEFAULT_MAX_RETRY", 2),
@@ -165,6 +179,7 @@ func FromEnv() *Config {
 		TraceOTLPEndpoint:     getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		TraceMaxTraces:        getEnvInt("OTEL_MAX_TRACES", 256),
 		TraceMaxSpansPerTrace: getEnvInt("OTEL_MAX_SPANS_PER_TRACE", 200),
+		MigrateOnStartup:      getEnvBool("MIGRATE_ON_STARTUP", true),
 	}
 }
 
@@ -290,6 +305,20 @@ func (c *Config) Validate() []Problem {
 	if c.StorageMode == "memory" {
 		ps = append(ps, Problem{"STORAGE_MODE",
 			"非 dev 环境使用内存存储：进程重启即丢失全部工作流、任务与知识库数据", true})
+	}
+
+	// ---------- 加密密钥 ----------
+	// 非 dev 环境必须设置 32 字节加密密钥，否则 API Key 明文存库，
+	// 数据库泄露会导致所有 Provider 密钥全泄露。
+	switch {
+	case c.EncryptionKey == "":
+		ps = append(ps, Problem{"ENCRYPTION_KEY",
+			"未设置：LLM Provider 的 API Key 将以明文存储在数据库中，数据库泄露会导致密钥全泄露。"+
+				"生成一个 32 字节随机密钥：openssl rand -hex 16", true})
+	case len(c.EncryptionKey) < 32:
+		ps = append(ps, Problem{"ENCRYPTION_KEY",
+			fmt.Sprintf("长度 %d 字节 < 32 字节：AES-256 要求密钥正好 32 字节（256 位）。"+
+				"生成一个随机密钥：openssl rand -hex 16", len(c.EncryptionKey)), true})
 	}
 
 	if c.QueueAdmitRatio < 0 {

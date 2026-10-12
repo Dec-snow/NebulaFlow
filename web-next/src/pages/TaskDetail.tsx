@@ -21,15 +21,18 @@ import {
   CardHeader,
   EmptyState,
   MiniStat,
+  PageLoader,
   Segmented,
   StatusBadge,
   StatusDot,
   statusMeta,
 } from "@/components/ui";
-import { TASKS, type TaskNodeRow } from "@/lib/mock";
+import { api } from "@/api";
+import { useFetch } from "@/hooks";
+import type { TaskNodeRow } from "@/types";
 import { clockOf, cn, fmtDuration, timeAgo } from "@/lib/utils";
 
-const TYPE_ICON: Record<TaskNodeRow["type"], LucideIcon> = {
+const TYPE_ICON: Record<string, LucideIcon> = {
   input: LogIn,
   llm: Sparkles,
   rag: Database,
@@ -37,7 +40,7 @@ const TYPE_ICON: Record<TaskNodeRow["type"], LucideIcon> = {
   output: LogOut,
 };
 
-const TYPE_LABEL: Record<TaskNodeRow["type"], string> = {
+const TYPE_LABEL: Record<string, string> = {
   input: "输入",
   llm: "LLM",
   rag: "RAG",
@@ -81,13 +84,21 @@ function buildEvents(taskId: number, nodes: TaskNodeRow[]) {
 export default function TaskDetail() {
   const { id } = useParams();
   const taskId = Number(id);
-  const task = TASKS.find((t) => t.id === taskId) ?? TASKS[0];
   const [tab, setTab] = useState<"events" | "output">("events");
 
-  const events = buildEvents(task.id, task.nodes);
-  const tokensIn = task.nodes.reduce((s, n) => s + n.tokensIn, 0);
-  const tokensOut = task.nodes.reduce((s, n) => s + n.tokensOut, 0);
-  const maxDur = Math.max(...task.nodes.map((n) => n.durationMs), 1);
+  const { data, loading } = useFetch(
+    () => api.tasks.get(taskId),
+    [taskId],
+  );
+
+  if (loading || !data) return <PageLoader text="加载任务详情…" />;
+
+  const { task, nodes } = data;
+
+  const events = buildEvents(task.id, nodes);
+  const tokensIn = nodes.reduce((s, n) => s + n.tokensIn, 0);
+  const tokensOut = nodes.reduce((s, n) => s + n.tokensOut, 0);
+  const maxDur = Math.max(...nodes.map((n) => n.durationMs), 1);
 
   const statusTone: Record<string, string> = {
     succeeded: "bg-mint",
@@ -146,10 +157,10 @@ export default function TaskDetail() {
           <MiniStat label="输出 token" value={tokensOut.toLocaleString()} tone="sky" />
         </Card>
         <Card>
-          <MiniStat label="节点总数" value={task.nodes.length} />
+          <MiniStat label="节点总数" value={nodes.length} />
           <MiniStat
             label="成功节点"
-            value={task.nodes.filter((n) => n.status === "succeeded").length}
+            value={nodes.filter((n) => n.status === "succeeded").length}
             tone="mint"
           />
         </Card>
@@ -168,16 +179,16 @@ export default function TaskDetail() {
             action={
               <Badge tone="sky">
                 <StatusDot tone="sky" pulse={task.status === "running"} />
-                {task.nodes.length} 节点
+                {nodes.length} 节点
               </Badge>
             }
           />
 
           <div>
-            {task.nodes.map((n, i) => {
-              const Icon = TYPE_ICON[n.type];
+            {nodes.map((n, i) => {
+              const Icon = TYPE_ICON[n.type] ?? Sparkles;
               const meta = statusMeta(n.status);
-              const isLast = i === task.nodes.length - 1;
+              const isLast = i === nodes.length - 1;
               return (
                 <div key={n.key} className="flex gap-3">
                   {/* 左侧时间线轨道 */}
@@ -205,7 +216,7 @@ export default function TaskDetail() {
                       </span>
                       <Badge tone="neutral">
                         <Icon size={10} />
-                        {TYPE_LABEL[n.type]}
+                        {TYPE_LABEL[n.type] ?? n.type}
                       </Badge>
                       <StatusBadge status={n.status} />
                       <span className="tnum ml-auto text-2xs text-fg-subtle">

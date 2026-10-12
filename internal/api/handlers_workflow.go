@@ -158,13 +158,16 @@ func (h *workflowHandler) listTemplates(c *gin.Context) {
 
 // GET /api/templates/:id —— 模板详情（含节点/边，用于预览）
 func (h *workflowHandler) getTemplate(c *gin.Context) {
+	u := getUser(c)
 	id := mustID(c)
-	wf, err := h.store.Workflows.GetTemplate(c.Request.Context(), id)
+	if c.IsAborted() {
+		return
+	}
+	wf, err := h.store.Workflows.GetTemplate(c.Request.Context(), id, u.ID)
 	if err != nil {
 		abortWithError(c, err)
 		return
 	}
-	// 模板不需要归属检查：系统模板(user_id=0)所有人可见
 	c.JSON(http.StatusOK, wf)
 }
 
@@ -192,22 +195,13 @@ func (h *workflowHandler) useTemplate(c *gin.Context) {
 }
 
 // GET /api/templates/categories —— 模板分类列表
-// 返回所有模板的分类（去重），用于前端分类筛选器。
+// 返回用户可见模板的所有分类（去重），用于前端分类筛选器。
 func (h *workflowHandler) listCategories(c *gin.Context) {
 	u := getUser(c)
-	list, err := h.store.Workflows.ListTemplates(c.Request.Context(), u.ID, "")
+	categories, err := h.store.Workflows.ListTemplateCategories(c.Request.Context(), u.ID)
 	if err != nil {
 		abortWithError(c, err)
 		return
-	}
-	// 去重
-	seen := make(map[string]bool)
-	var categories []string
-	for _, w := range list {
-		if w.Category != "" && !seen[w.Category] {
-			seen[w.Category] = true
-			categories = append(categories, w.Category)
-		}
 	}
 	c.JSON(http.StatusOK, gin.H{"categories": categories})
 }
@@ -220,6 +214,10 @@ func orDefault(s, def string) string {
 }
 
 func mustID(c *gin.Context) int64 {
-	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid id parameter"})
+		return 0
+	}
 	return id
 }

@@ -1,10 +1,10 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: nebula
-      POSTGRES_PASSWORD: nebula
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nebula}
       POSTGRES_DB: nebulaflow
     ports:
       - "5432:5432"
@@ -41,10 +41,10 @@ services:
     environment:
       APP_ENV: prod
       PORT: "8080"
-      DATABASE_URL: "postgres://nebula:nebula@postgres:5432/nebulaflow?sslmode=disable"
+      DATABASE_URL: "postgres://nebula:${POSTGRES_PASSWORD:-nebula}@postgres:5432/nebulaflow?sslmode=disable"
       REDIS_ADDR: "redis:6379"
       # ⚠ 生产环境请务必修改：openssl rand -hex 32
-      JWT_SECRET: "please-change-this-to-a-strong-random-secret-32chars+"
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-to-a-strong-random-secret-32chars+}
       JWT_EXPIRE_HOURS: "72"
       WORKER_COUNT: "20"
       USE_REDIS_QUEUE: "true"
@@ -71,6 +71,7 @@ services:
       - "9090:9090"
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerting_rules.yml:/etc/prometheus/alerting_rules.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -87,7 +88,7 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro

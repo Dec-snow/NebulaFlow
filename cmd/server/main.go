@@ -25,6 +25,7 @@ import (
 	"github.com/hoarfrost/nebulaflow/internal/auth"
 	"github.com/hoarfrost/nebulaflow/internal/cache"
 	"github.com/hoarfrost/nebulaflow/internal/config"
+	nebulaflowcrypto "github.com/hoarfrost/nebulaflow/internal/crypto"
 	"github.com/hoarfrost/nebulaflow/internal/database"
 	"github.com/hoarfrost/nebulaflow/internal/llm"
 	"github.com/hoarfrost/nebulaflow/internal/model"
@@ -157,16 +158,20 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			"max_conn_idle_time", poolOpt.MaxConnIdleTime,
 			"connect_timeout", poolOpt.ConnectTimeout,
 			"worker_count", cfg.WorkerCount)
-		if err := db.Migrate(runCtx); err != nil {
-			return err
+		if cfg.MigrateOnStartup {
+			if err := db.Migrate(runCtx); err != nil {
+				return err
+			}
+			// 向量列维度与 HNSW 索引无法写在 SQL 迁移里（维度来自配置，SQL 不可参数化），
+			// 所以迁移之后单独收敛一次。失败直接拒绝启动：检索是 RAG 的核心路径，
+			// 带着一个没有索引（= 全表顺序扫描）的知识库上线，不如启动就报错。
+			if err := db.EnsureVectorSchema(runCtx, cfg.EmbedDim); err != nil {
+				return fmt.Errorf("初始化向量存储（EMBED_DIM=%d）: %w", cfg.EmbedDim, err)
+			}
+			logger.Info("postgres connected & migrated", "embed_dim", cfg.EmbedDim)
+		} else {
+			logger.Info("postgres connected (migrate on startup disabled)")
 		}
-		// 向量列维度与 HNSW 索引无法写在 SQL 迁移里（维度来自配置，SQL 不可参数化），
-		// 所以迁移之后单独收敛一次。失败直接拒绝启动：检索是 RAG 的核心路径，
-		// 带着一个没有索引（= 全表顺序扫描）的知识库上线，不如启动就报错。
-		if err := db.EnsureVectorSchema(runCtx, cfg.EmbedDim); err != nil {
-			return fmt.Errorf("初始化向量存储（EMBED_DIM=%d）: %w", cfg.EmbedDim, err)
-		}
-		logger.Info("postgres connected & migrated", "embed_dim", cfg.EmbedDim)
 	}
 
 	if cfg.RedisAddr != "" {
@@ -194,6 +199,40 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	} else {
 		st = store.New(db)
 	}
+
+	// ---------- Provider API Key 加密 ----------
+	//
+	// 配置了 ENCRYPTION_KEY 就用 AES-256-GCM 加密存储 Provider 的 API Key，
+	// 否则保持明文（dev 环境零配置启动的兜底）。
+	// 装饰器替换 st.Providers：上层所有调用方（API / Gateway / 迁移）
+	// 都走同一个加密层，不会有旁路。
+	if cfg.EncryptionKey != "" {
+		encKey := []byte(cfg.EncryptionKey)
+		if err := nebulaflowcrypto.ValidateKey(encKey); err != nil {
+			return fmt.Errorf("ENCRYPTION_KEY 非法: %w", err)
+		}
+		encProvider, err := store.NewProviderStoreWithEncryption(st.Providers, encKey)
+		if err != nil {
+			return fmt.Errorf("初始化 provider 加密层失败: %w", err)
+		}
+		// 启动时执行存量明文迁移：把数据库里还没加密的 API Key 加密写回。
+		// 幂等操作，已加密的数据不会被重复处理。
+		// 只在 postgres 模式下跑迁移：memory 模式每次启动都是空的，没必要。
+		if !memMode {
+			if _, err := encProvider.MigratePlaintextKeys(runCtx, logger); err != nil {
+				logger.Error("provider key migration failed", "error", err)
+				// 迁移失败不阻断启动：装饰器的"宽容读取"依然能正常工作，
+				// 只是存量数据还是明文。比起直接拒绝服务，这是更安全的降级。
+				// 运维可以从日志里发现问题后手动修复。
+			}
+		}
+		st.Providers = encProvider
+		logger.Info("provider api key encryption enabled",
+			"algorithm", "AES-256-GCM")
+	} else {
+		logger.Warn("provider api key encryption disabled (ENCRYPTION_KEY not set): api keys stored in plaintext")
+	}
+
 	authSvc := auth.NewService(st.Users, cfg.JWTSecret, cfg.JWTExpire)
 
 	// 任务队列：有 Redis 且开关打开就用 Redis Stream，否则退回内存队列
@@ -269,6 +308,11 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 
 	ragSvc := rag.NewService(embedder)
 
+	// 异步文档索引器：后台并发执行向量化，避免大文件上传导致 HTTP 超时。
+	// 并发度默认 2，队列默认 128，可通过环境变量调整（后续可接入配置）。
+	docIndexer := rag.NewIndexer(ragSvc, st.Knowledge, cfg.IndexConcurrency, 0, logger)
+	docIndexer.Start()
+
 	// Embedder 的实际输出维度必须与 EMBED_DIM 一致。
 	//
 	// 为什么必须显式探测而不是"相信配置"：embedder 是运行时从数据库的 provider
@@ -335,7 +379,7 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		}), nil
 	})
 
-	server := api.NewServer(st, authSvc, taskSvc, ragSvc, gateway, embedder, q, pool,
+	server := api.NewServer(st, authSvc, taskSvc, ragSvc, docIndexer, gateway, embedder, q, pool,
 		metrics, limiter, prometheus.DefaultGatherer, tp, &api.Config{
 			CORSOrigins:         cfg.CORSOrigins,
 			RateLimitPerMin:     cfg.RateLimitPerMin,
@@ -370,9 +414,16 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	pool.Shutdown(10 * time.Second)
+	// 先停 HTTP：停止接收新请求，让在途请求跑完。
+	// 必须先于 worker pool：否则 pool 关了但 HTTP 还在收任务，
+	// 新任务入队后没人消费，用户看到的就是"提交了但一直 pending"。
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http shutdown", "error", err)
+	}
+	pool.Shutdown(10 * time.Second)
+	// 等待文档索引器完成在途任务，避免关闭时丢失正在索引的文档
+	if err := docIndexer.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("doc indexer shutdown", "error", err)
 	}
 	// 刷出还在批量缓冲里的 span。不做这一步，最后几秒的链路会凭空消失——
 	// 而"关服前后的那批请求"恰恰是排查重启类问题时最想看的一段。

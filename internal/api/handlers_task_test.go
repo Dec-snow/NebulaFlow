@@ -39,14 +39,19 @@ func TestAbortWithErrorMapsDomainErrors(t *testing.T) {
 		// 调用方存在传 nil 的路径，err.Error() 会 panic——这是 Go 里很典型的一类线上崩溃。
 		{"nil 错误按 500 处理且不 panic", nil, http.StatusInternalServerError, ""},
 		{"凭据错误 → 401", auth.ErrInvalidCredentials, http.StatusUnauthorized, ""},
+		{"token 无效 → 401", auth.ErrInvalidToken, http.StatusUnauthorized, ""},
 		{"用户已存在 → 409", store.ErrUserExists, http.StatusConflict, ""},
 		{"工作流不存在 → 404", store.ErrWorkflowNotFound, http.StatusNotFound, ""},
 		{"任务不存在 → 404", store.ErrTaskNotFound, http.StatusNotFound, ""},
 		{"知识库不存在 → 404", store.ErrKBNotFound, http.StatusNotFound, ""},
 		{"Provider 不存在 → 404", store.ErrProviderNotFound, http.StatusNotFound, ""},
 		{"任务已终态 → 409", task.ErrTaskNotCancellable, http.StatusConflict, ""},
+		{"参数校验错误 → 400", store.ErrValidation, http.StatusBadRequest, ""},
+		{"包装过的校验错误 → 400", fmt.Errorf("bad input: %w", store.ErrValidation), http.StatusBadRequest, ""},
+		{"单用户 SSE 连接超限 → 429", task.ErrUserConnectionsExceeded, http.StatusTooManyRequests, ""},
 		// 背压的关键契约：503（过载）而不是 500（故障），并告诉调用方可以重试。
 		{"队列饱和 → 503 + Retry-After", queue.ErrQueueFull, http.StatusServiceUnavailable, "1"},
+		{"全局 SSE 连接超限 → 503 + Retry-After", task.ErrTooManyConnections, http.StatusServiceUnavailable, "5"},
 		{"未知错误 → 500", errors.New("boom"), http.StatusInternalServerError, ""},
 	}
 

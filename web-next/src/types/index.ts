@@ -51,12 +51,15 @@ export interface WorkflowSummary {
   name: string;
   description: string;
   status: WorkflowStatus;
-  nodes: number;
-  edges: number;
+  nodeCount: number;
+  edgeCount: number;
   runs: number;
   successRate: number;
   avgDurationMs: number;
   updatedAt: string;
+  /** 缩略图节点位置（0–100 的相对坐标） */
+  mini: { id: string; x: number; y: number }[];
+  miniEdges: [string, string][];
 }
 
 export type NodeKind = "input" | "output" | "llm" | "tool" | "rag" | "condition";
@@ -97,7 +100,7 @@ export interface NodeConfig {
  *  任务
  * ========================================================== */
 
-export type TaskStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+export type TaskStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
 
 export interface TaskRow {
   id: number;
@@ -105,9 +108,10 @@ export interface TaskRow {
   workflowId: number;
   status: TaskStatus;
   durationMs: number;
-  totalTokens: number;
+  tokens: number;
   startedAt: string;
   input: string;
+  nodes: TaskNodeRow[];
 }
 
 export interface TaskNodeRow {
@@ -146,19 +150,29 @@ export interface Provider {
  *  知识库
  * ========================================================== */
 
+export type KbDocStatus = "indexed" | "indexing" | "failed";
+
+export interface KbDoc {
+  id: number;
+  filename: string;
+  status: KbDocStatus;
+  chunks: number;
+  sizeKb: number;
+  createdAt: string;
+}
+
 export interface KnowledgeBase {
   id: number;
   name: string;
-  docs: number;
-  chunks: number;
-  updatedAt: string;
+  description: string;
+  docs: KbDoc[];
 }
 
 export interface RetrievalHit {
-  id: string;
+  id: number;
   source: string;
   score: number;
-  snippet: string;
+  content: string;
 }
 
 /* ============================================================
@@ -211,23 +225,23 @@ export type AgentStatus = "active" | "inactive" | "error";
 
 export interface Agent {
   id: number;
-  user_id: number;
+  userId: number;
   name: string;
   description: string;
-  runtime_type: AgentRuntimeType;
+  runtimeType: AgentRuntimeType;
   endpoint?: string;
   model?: string;
   capabilities: string[];
   status: AgentStatus;
   version: string;
-  timeout_sec: number;
-  created_at: string;
-  updated_at: string;
+  timeoutSec: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentMarketplaceResponse {
   items: Agent[];
-  installed_names: string[];
+  installedNames: string[];
 }
 
 /* ============================================================
@@ -241,8 +255,8 @@ export interface WorkflowTemplate {
   category: string;
   icon?: string;
   nodes: number;
-  used_count: number;
-  created_at: string;
+  usedCount: number;
+  createdAt: string;
 }
 
 /* ============================================================

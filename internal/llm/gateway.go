@@ -26,12 +26,15 @@ type Usage struct {
 //   - Stream：等待首个 token 超时 / 流未产出任何内容即换下一个 provider；
 //     一旦已经开始产出内容就"已提交"，中途失败不再回退
 //     （否则用户会看到两段拼接的重复输出）
+//   - 熔断器：连续失败达到阈值的 provider 会被临时跳过，避免每次都先
+//     试一个已知挂掉的 provider 浪费超时时间
 type Gateway struct {
 	providers         []Provider // 按优先级排序（已启用）
 	logger            *slog.Logger
 	attemptTimeout    time.Duration
 	firstTokenTimeout time.Duration // 等待首个 token 的上限，超时即切换 provider
 	onUsage           UsageFunc
+	breakers          *CircuitBreakerRegistry // 每个 provider 独立熔断器
 }
 
 // defaultFirstTokenTimeout 是等待模型吐出第一个 token 的默认上限。
@@ -52,6 +55,14 @@ func NewGateway(providers []Provider, logger *slog.Logger, attemptTimeout time.D
 		attemptTimeout:    attemptTimeout,
 		firstTokenTimeout: defaultFirstTokenTimeout,
 		onUsage:           onUsage,
+		breakers:          NewCircuitBreakerRegistry(),
+	}
+}
+
+// SetCircuitBreaker 允许外部注入自定义熔断器配置（测试 / 特殊配置）。
+func (g *Gateway) SetCircuitBreaker(breakers *CircuitBreakerRegistry) {
+	if breakers != nil {
+		g.breakers = breakers
 	}
 }
 
@@ -62,16 +73,27 @@ func (g *Gateway) Providers() []Provider { return g.providers }
 func (g *Gateway) Name() string { return "gateway" }
 
 // Chat 带故障转移：依次尝试每个 provider，全部失败返回聚合错误。
+// 熔断器：处于 Open 状态的 provider 会被跳过，避免浪费超时时间。
 func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	if len(g.providers) == 0 {
 		return nil, errors.New("no llm provider configured")
 	}
 	var lastErr error
+	skipped := 0
 	for i, p := range g.providers {
+		name := p.Name()
+		// 熔断跳过：Open 状态的 provider 直接跳过
+		if !g.breakers.Allow(name) {
+			skipped++
+			g.logger.Debug("llm provider skipped (circuit breaker open)",
+				"provider", name, "model", req.Model)
+			continue
+		}
 		attemptCtx, cancel := context.WithTimeout(ctx, g.attemptTimeout)
 		resp, err := p.Chat(attemptCtx, req)
 		cancel()
 		if err == nil {
+			g.breakers.RecordSuccess(name)
 			if g.onUsage != nil {
 				g.onUsage(&Usage{
 					Provider: resp.Provider, Model: resp.Model,
@@ -79,18 +101,23 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, err
 					LatencyMS: resp.LatencyMS,
 				})
 			}
-			if i > 0 {
+			if i > 0 || skipped > 0 {
 				g.logger.Info("llm fallback succeeded",
-					"provider", resp.Provider, "model", req.Model, "after_attempts", i+1)
+					"provider", resp.Provider, "model", req.Model,
+					"after_attempts", i+1-skipped, "skipped", skipped)
 			}
 			return resp, nil
 		}
 		lastErr = err
+		// context 取消/超时类错误不计入熔断（可能是调用方主动中止，不是 provider 故障）
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			g.breakers.RecordFailure(name)
+		}
 		if g.onUsage != nil {
-			g.onUsage(&Usage{Provider: p.Name(), Model: req.Model, Error: err.Error()})
+			g.onUsage(&Usage{Provider: name, Model: req.Model, Error: err.Error()})
 		}
 		g.logger.Warn("llm attempt failed, trying fallback",
-			"provider", p.Name(), "model", req.Model, "attempt", i+1, "error", err)
+			"provider", name, "model", req.Model, "attempt", i+1, "error", err)
 	}
 	return nil, fmt.Errorf("all llm providers failed: %w", lastErr)
 }
@@ -102,12 +129,22 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, err
 //   - 一旦拿到内容就视为已提交，之后原样转发，中途错误通过 Chunk.Err 上抛，
 //     由节点层按重试策略处理（不在中途切换，避免输出拼接出错）；
 //   - 流式期间不设总时长上限，只受调用方 ctx 约束，长回答不会被网关截断。
+//   - 熔断器：Open 状态的 provider 会被直接跳过。
 func (g *Gateway) Stream(ctx context.Context, req ChatRequest) (<-chan Chunk, error) {
 	if len(g.providers) == 0 {
 		return nil, errors.New("no llm provider configured")
 	}
 	var lastErr error
+	skipped := 0
 	for i, p := range g.providers {
+		name := p.Name()
+		// 熔断跳过：Open 状态的 provider 直接跳过
+		if !g.breakers.Allow(name) {
+			skipped++
+			g.logger.Debug("llm stream provider skipped (circuit breaker open)",
+				"provider", name, "model", req.Model)
+			continue
+		}
 		// 用 WithCancel 而非 WithTimeout：流的生命周期交给调用方控制，
 		// 网关只保证"首 token 不无限等待"。
 		attemptCtx, cancel := context.WithCancel(ctx)
@@ -115,21 +152,32 @@ func (g *Gateway) Stream(ctx context.Context, req ChatRequest) (<-chan Chunk, er
 		if err != nil {
 			cancel()
 			lastErr = err
+			// context 取消/超时不计入熔断
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				g.breakers.RecordFailure(name)
+			}
 			g.logger.Warn("llm stream attempt failed, trying fallback",
-				"provider", p.Name(), "model", req.Model, "attempt", i+1, "error", err)
+				"provider", name, "model", req.Model, "attempt", i+1, "error", err)
 			continue
 		}
 
 		buffered, ok := g.awaitFirstToken(attemptCtx, ch)
 		if !ok {
 			cancel()
-			lastErr = fmt.Errorf("provider %s produced no content before deadline", p.Name())
+			lastErr = fmt.Errorf("provider %s produced no content before deadline", name)
+			// 首 token 超时 / 无内容也算失败
+			if ctx.Err() == nil {
+				g.breakers.RecordFailure(name)
+			}
 			g.logger.Warn("llm stream produced nothing, trying fallback",
-				"provider", p.Name(), "model", req.Model, "attempt", i+1)
+				"provider", name, "model", req.Model, "attempt", i+1)
 			continue
 		}
-		if i > 0 {
-			g.logger.Info("llm stream fallback succeeded", "provider", p.Name(), "model", req.Model)
+		// 拿到了内容 → 记录成功
+		g.breakers.RecordSuccess(name)
+		if i > 0 || skipped > 0 {
+			g.logger.Info("llm stream fallback succeeded", "provider", name, "model", req.Model,
+				"skipped", skipped)
 		}
 
 		out := make(chan Chunk, 64)

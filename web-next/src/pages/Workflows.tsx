@@ -12,12 +12,16 @@ import {
   Button,
   Card,
   EmptyState,
+  ErrorState,
   IconButton,
   Input,
+  PageLoader,
   Segmented,
   StatusBadge,
 } from "@/components/ui";
-import { WORKFLOWS, type WorkflowSummary } from "@/lib/mock";
+import { api } from "@/api";
+import { useDebounce, useFetch } from "@/hooks";
+import type { WorkflowSummary } from "@/types";
 import { cn, timeAgo } from "@/lib/utils";
 
 /** 迷你 DAG 缩略图：把节点相对坐标映射到小视口，仅表达拓扑形状。 */
@@ -131,18 +135,31 @@ function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
 export default function Workflows() {
   const [filter, setFilter] = useState<"all" | "published" | "draft">("all");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebounce(q, 300);
 
-  const list = WORKFLOWS.filter(
-    (w) =>
-      (filter === "all" || w.status === filter) &&
-      (q === "" || w.name.toLowerCase().includes(q.toLowerCase())),
+  const { data, loading, error, refresh } = useFetch(
+    () =>
+      api.workflows.list({
+        status: filter === "all" ? undefined : filter,
+        q: debouncedQ || undefined,
+      }),
+    [filter, debouncedQ],
   );
 
+  const list = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  // 计算各状态数量（用全量数据近似，实际应由后端返回）
+  const allList = data?.items ?? [];
   const counts = {
-    all: WORKFLOWS.length,
-    published: WORKFLOWS.filter((w) => w.status === "published").length,
-    draft: WORKFLOWS.filter((w) => w.status === "draft").length,
+    all: total,
+    published: allList.filter((w) => w.status === "published").length,
+    draft: allList.filter((w) => w.status === "draft").length,
   };
+
+  if (loading) return <PageLoader text="加载工作流列表…" />;
+
+  if (error) return <ErrorState title="加载工作流列表失败" description={error.message} onRetry={refresh} />;
 
   return (
     <div className="space-y-6">
@@ -151,7 +168,7 @@ export default function Workflows() {
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-fg">工作流</h2>
           <p className="mt-0.5 text-xs text-fg-subtle">
-            共 {WORKFLOWS.length} 个工作流 · 拖拽节点即可编排 DAG
+            共 {total} 个工作流 · 拖拽节点即可编排 DAG
           </p>
         </div>
         <Button variant="brand" icon={<Plus size={15} />}>

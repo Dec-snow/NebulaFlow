@@ -1,0 +1,81 @@
+# 手动回滚到上一个版本
+# 使用方式：GitHub Actions → Run workflow → 手动触发
+# 原理：读取 releases 目录，把 current 软链接指向上一个版本目录
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: "目标版本目录名（留空则回滚到上一个版本），例如 20240115-143022"
+        required: false
+        default: ""
+
+jobs:
+  rollback:
+    name: Rollback frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rollback over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            set -euo pipefail
+
+            RELEASES_DIR="/var/www/nebula/releases"
+            CURRENT_LINK="/var/www/nebula/current"
+            TARGET="${{ github.event.inputs.target_version }}"
+
+            # 确保 releases 目录存在
+            if [ ! -d "${RELEASES_DIR}" ]; then
+              echo "error: releases directory ${RELEASES_DIR} does not exist"
+              exit 1
+            fi
+
+            # 1. 确定目标版本
+            if [ -n "${TARGET}" ]; then
+              # 指定版本回滚
+              TARGET_DIR="${RELEASES_DIR}/${TARGET}"
+              if [ ! -d "${TARGET_DIR}" ]; then
+                echo "error: target version ${TARGET} does not exist"
+                echo "available versions:"
+                ls -t "${RELEASES_DIR}"
+                exit 1
+              fi
+            else
+              # 自动回滚到上一个版本（current 指向的版本的前一个）
+              CURRENT_VERSION=$(readlink "${CURRENT_LINK}" | xargs basename 2>/dev/null || true)
+              if [ -z "${CURRENT_VERSION}" ]; then
+                echo "error: cannot resolve current version"
+                exit 1
+              fi
+
+              # 按时间倒序列出所有版本，找到 current 的下一个（即上一个版本）
+              PREV_VERSION=$(ls -t "${RELEASES_DIR}" | awk -v cur="${CURRENT_VERSION}" '
+                found { print; exit }
+                $0 == cur { found = 1 }
+              ')
+
+              if [ -z "${PREV_VERSION}" ]; then
+                echo "error: no previous version found to roll back to"
+                echo "current version: ${CURRENT_VERSION}"
+                echo "available versions:"
+                ls -t "${RELEASES_DIR}"
+                exit 1
+              fi
+
+              TARGET_DIR="${RELEASES_DIR}/${PREV_VERSION}"
+            fi
+
+            # 2. 原子切换软链接
+            TARGET_NAME=$(basename "${TARGET_DIR}")
+            ln -sfn "${TARGET_DIR}" "${CURRENT_LINK}.tmp"
+            mv -T "${CURRENT_LINK}.tmp" "${CURRENT_LINK}"
+
+            # 3. reload nginx
+            nginx -t && nginx -s reload
+
+            echo "rollback ok: ${TARGET_NAME}"

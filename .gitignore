@@ -32,3 +32,14 @@ web-next/dist/
 web-next/.output/
 web-next/.nuxt/
 web/dist/
+
+# 测试与覆盖率
+coverage.out
+coverage.html
+*.test
+
+# 系统文件
+Thumbs.db
+
+# 基准测试结果
+benchmark/results/

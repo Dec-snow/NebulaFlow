@@ -16,6 +16,7 @@ import {
   Button,
   Card,
   CardHeader,
+  ErrorState,
   MiniStat,
   PageLoader,
   RingProgress,
@@ -26,8 +27,11 @@ import {
 } from "@/components/ui";
 import { api } from "@/api";
 import { useFetch } from "@/hooks";
-import { type ActivityKind } from "@/lib/mock";
+import type { ActivityKind } from "@/types";
 import { clockOf, cn } from "@/lib/utils";
+
+/** 活动流列表最大保留条数，超出截断（避免长时间运行后内存膨胀） */
+const ACTIVITY_MAX_ITEMS = 200;
 
 const KIND_ICON: Record<ActivityKind, typeof Zap> = {
   task: Zap,
@@ -45,12 +49,14 @@ const KIND_TONE: Record<ActivityKind, string> = {
 
 export default function Dashboard() {
   const [range, setRange] = useState<"24h" | "7d" | "30d">("24h");
-  const { data, loading, refresh } = useFetch(
+  const { data, loading, error, refresh } = useFetch(
     () => api.dashboard.get(range),
     [range],
   );
 
   if (loading || !data) return <PageLoader text="加载控制台数据…" />;
+
+  if (error) return <ErrorState title="加载控制台数据失败" description={error.message} onRetry={refresh} />;
 
   const {
     kpis,
@@ -58,9 +64,12 @@ export default function Dashboard() {
     throughputLabels,
     workerStats,
     tokenByProvider,
-    activity,
+    activity: rawActivity,
     recentTasks,
   } = data;
+
+  // 活动流最多保留 200 条，超出截断
+  const activity = rawActivity.slice(0, ACTIVITY_MAX_ITEMS);
 
   return (
     <div className="space-y-7">

@@ -123,11 +123,35 @@ func (f *fakeWorkflows) ListTemplates(_ context.Context, userID int64, category 
 	return out, nil
 }
 
-func (f *fakeWorkflows) GetTemplate(_ context.Context, id int64) (*model.Workflow, error) {
+func (f *fakeWorkflows) ListTemplateCategories(_ context.Context, userID int64) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := make(map[string]bool)
+	var cats []string
+	for _, wf := range f.workflows {
+		if !wf.IsTemplate {
+			continue
+		}
+		if wf.UserID != 0 && wf.UserID != userID {
+			continue
+		}
+		if wf.Category == "" || seen[wf.Category] {
+			continue
+		}
+		seen[wf.Category] = true
+		cats = append(cats, wf.Category)
+	}
+	return cats, nil
+}
+
+func (f *fakeWorkflows) GetTemplate(_ context.Context, id, userID int64) (*model.Workflow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	wf, ok := f.workflows[id]
 	if !ok || !wf.IsTemplate {
+		return nil, fmt.Errorf("not found")
+	}
+	if wf.UserID != 0 && wf.UserID != userID {
 		return nil, fmt.Errorf("not found")
 	}
 	c := *wf
@@ -135,7 +159,7 @@ func (f *fakeWorkflows) GetTemplate(_ context.Context, id int64) (*model.Workflo
 }
 
 func (f *fakeWorkflows) CreateFromTemplate(ctx context.Context, templateID int64, targetUserID int64, newName string) (*model.Workflow, error) {
-	tpl, err := f.GetTemplate(ctx, templateID)
+	tpl, err := f.GetTemplate(ctx, templateID, targetUserID)
 	if err != nil {
 		return nil, err
 	}
