@@ -2,8 +2,8 @@ package rag
 
 import (
 	"context"
+	"io"
 	"log/slog"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,7 +15,7 @@ import (
 
 // testLogger 返回一个丢弃日志的 logger，避免测试输出被刷屏。
 func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.DevNull, nil))
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 // newTestIndexer 创建一个用于测试的索引器：内存存储 + 本地 hash embedder。
