@@ -80,6 +80,7 @@ jobs:
           key: ${{ secrets.DEPLOY_KEY }}
           source: deploy/nebula.conf
           target: /tmp
+          strip_components: 1
 
       - name: Deploy over SSH (versioned release + symlink)
         uses: appleboy/ssh-action@v1.0.3
