@@ -14,7 +14,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/api";
 import { useDebounce, useFetch } from "@/hooks";
-import { fmtDuration, timeAgo } from "@/lib/utils";
+import { fmtDuration, numberOrNull, timeAgo } from "@/lib/utils";
 
 type Filter = "all" | "running" | "succeeded" | "failed";
 
@@ -33,11 +33,12 @@ export default function Tasks() {
     [filter, debouncedQ],
   );
 
-  const list = data?.items ?? [];
-  const total = data?.total ?? 0;
+  // items / total 可能缺失（后端只回数组或分页字段被省略）
+  const list = Array.isArray(data?.items) ? data.items : [];
+  const total = numberOrNull(data?.total) ?? 0;
 
   // 各状态数量（基于当前页数据近似）
-  const pageList = data?.items ?? [];
+  const pageList = list;
   const counts = {
     all: total,
     running: pageList.filter((t) => t.status === "running").length,
@@ -120,7 +121,10 @@ export default function Tasks() {
               </tr>
             </thead>
             <tbody>
-              {list.map((t) => (
+              {list.map((t) => {
+                // tokens 不是后端 task 的字段（只在 task_node 上有），缺失时保持原来的 "—" 语义
+                const tokens = numberOrNull(t.tokens);
+                return (
                 <tr
                   key={t.id}
                   onClick={() => navigate(`/tasks/${t.id}`)}
@@ -146,7 +150,7 @@ export default function Tasks() {
                     {fmtDuration(t.durationMs)}
                   </td>
                   <td className="tnum text-right text-xs">
-                    {t.tokens > 0 ? t.tokens.toLocaleString() : "—"}
+                    {tokens !== null && tokens > 0 ? tokens.toLocaleString() : "—"}
                   </td>
                   <td className="text-2xs text-fg-subtle">
                     {timeAgo(t.startedAt)}
@@ -158,7 +162,8 @@ export default function Tasks() {
                     />
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

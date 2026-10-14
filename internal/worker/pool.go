@@ -84,6 +84,43 @@ type WorkerPool struct {
 	inflight sync.WaitGroup // 正在执行 Submit 的 goroutine 计数
 	closed   atomic.Bool
 	mu       sync.Mutex // 保护 exec 的读写
+
+	// runMu / running 登记每个在途节点的 cancel 函数，
+	// 供 Shutdown 强杀阶段逐个取消（见 execute 的说明）。
+	runMu      sync.Mutex
+	running    map[int64]context.CancelFunc
+	runningSeq atomic.Int64
+}
+
+// registerCancel 登记一个在途节点的 cancel，返回注销用的 key。
+func (p *WorkerPool) registerCancel(cancel context.CancelFunc) int64 {
+	key := p.runningSeq.Add(1)
+	p.runMu.Lock()
+	if p.running == nil {
+		p.running = map[int64]context.CancelFunc{}
+	}
+	p.running[key] = cancel
+	p.runMu.Unlock()
+	return key
+}
+
+func (p *WorkerPool) unregisterCancel(key int64) {
+	p.runMu.Lock()
+	delete(p.running, key)
+	p.runMu.Unlock()
+}
+
+// cancelRunning 取消所有在途节点的 ctx（Shutdown 超时后的强杀手段）。
+func (p *WorkerPool) cancelRunning() {
+	p.runMu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(p.running))
+	for _, c := range p.running {
+		cancels = append(cancels, c)
+	}
+	p.runMu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
 }
 
 func NewWorkerPool(ctx context.Context, workers int, queueCap int, exec Executor, logger *slog.Logger, metrics MetricsSink) *WorkerPool {
@@ -154,11 +191,22 @@ func (p *WorkerPool) execute(j NodeJob) {
 		p.updateMetrics()
 	}()
 
-	// 任务级 ctx 优先，保证取消/超时能真正打断节点执行
+	// 任务级 ctx 优先，保证取消/超时能真正打断节点执行。
+	//
+	// 这里再包一层可取消的 ctx，并把 cancel 登记到 runningCancels：
+	// Shutdown 强杀阶段需要"取消每一个在途节点的 ctx"，而只取消 p.poolCtx
+	// 对显式传了 Ctx 的节点完全无效（scheduler 永远会传任务级 Ctx）。
+	// 不登记的话，"强制唤醒所有阻塞方"只是一句空话：
+	// 实测一个不理会 poolCtx 的节点能把 Shutdown(500ms) 拖到 3s 以上。
 	execCtx := j.Ctx
 	if execCtx == nil {
 		execCtx = p.poolCtx
 	}
+	execCtx, cancelExec := context.WithCancel(execCtx)
+	defer cancelExec()
+	cancelKey := p.registerCancel(cancelExec)
+	defer p.unregisterCancel(cancelKey)
+
 	exec := p.executor()
 	if exec == nil {
 		p.logger.Error("worker pool has no executor configured", "task_id", j.TaskID, "node", j.NodeKey)
@@ -262,7 +310,27 @@ func (p *WorkerPool) Shutdown(timeout time.Duration) {
 		p.logger.Warn("worker pool drain timeout, cancelling executions")
 		p.quitOnce.Do(func() { close(p.quit) })
 		p.cancelFn()
-		<-done
+		// 关键：还要取消**每一个在途节点自己的 ctx**。
+		// 只取消 poolCtx 是无效的——scheduler 永远显式传任务级 Ctx，
+		// 于是 cancelFn() 对那些节点毫无作用，而下面那句无上限的 <-done
+		// 会把"声明了 timeout 的优雅关闭"变成一个不封顶的等待。
+		p.cancelRunning()
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			// 仍有节点不理会 ctx（外部 HTTP/SQL 没设 deadline、第三方 SDK
+			// 不响应取消）。此时继续等已无意义，报告并返回——
+			// Shutdown 的契约是"最多等 timeout"，不能因为一个不配合的节点
+			// 让整个进程的优雅退出无限期挂住。
+			p.logger.Error("worker pool shutdown timeout exceeded, forcing return",
+				"active", p.active.Load(), "hint", "仍有节点未响应 ctx 取消")
+			p.updateMetrics()
+			if p.metrics != nil {
+				p.metrics.SetWorkersActive(0)
+				p.metrics.SetQueueSize(0)
+			}
+			return
+		}
 	}
 
 	p.updateMetrics()

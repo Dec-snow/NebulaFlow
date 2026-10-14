@@ -1,4 +1,4 @@
-﻿/**
+/**
  * API 服务层：统一数据获取入口。
  *
  * 设计原则：
@@ -51,6 +51,8 @@ import type {
 } from "@/types";
 
 export type { PaginationParams, ListResponse } from "@/types";
+
+import { includesFold } from "@/lib/utils";
 
 /* ============================================================
  *  响应转换工具：snake_case → camelCase
@@ -150,8 +152,7 @@ async function listWorkflows(
   const { status, q, page = 1, pageSize = 10 } = params;
   let list = WORKFLOWS.filter(
     (w) =>
-      (!status || w.status === status) &&
-      (!q || w.name.toLowerCase().includes(q.toLowerCase())),
+      (!status || w.status === status) && includesFold(w.name, q),
   );
   const total = list.length;
   const start = (page - 1) * pageSize;
@@ -190,9 +191,7 @@ async function listTasks(
   let list = TASKS.filter(
     (t) =>
       (!status || t.status === status) &&
-      (!q ||
-        String(t.id).includes(q) ||
-        t.workflow.toLowerCase().includes(q.toLowerCase())),
+      (!q || String(t.id).includes(q) || includesFold(t.workflow, q)),
   );
   const total = list.length;
   const start = (page - 1) * pageSize;
@@ -262,9 +261,7 @@ async function listAgents(
   let list = AGENTS.filter(
     (a) =>
       (!runtimeType || a.runtimeType === runtimeType) &&
-      (!q ||
-        a.name.toLowerCase().includes(q.toLowerCase()) ||
-        a.description.toLowerCase().includes(q.toLowerCase())),
+      (includesFold(a.name, q) || includesFold(a.description, q)),
   );
   const total = list.length;
   const start = (page - 1) * pageSize;
@@ -280,10 +277,12 @@ async function listMarketplaceAgents(
   let items = MARKETPLACE_AGENTS.filter(
     (a) =>
       (!runtimeType || a.runtimeType === runtimeType) &&
-      (!q ||
-        a.name.toLowerCase().includes(q.toLowerCase()) ||
-        a.description.toLowerCase().includes(q.toLowerCase()) ||
-        a.capabilities.some((c) => c.toLowerCase().includes(q.toLowerCase()))),
+      (includesFold(a.name, q) ||
+        includesFold(a.description, q) ||
+        // capabilities 在 Agent 上可能是空/缺失（后端未配置能力时），
+        // 直接 .some 会抛 TypeError。
+        (Array.isArray(a.capabilities) &&
+          a.capabilities.some((c) => includesFold(c, q)))),
   );
   return delay({ items, installedNames });
 }
@@ -327,9 +326,7 @@ async function listTemplates(
   let list = WORKFLOW_TEMPLATES.filter(
     (t) =>
       (!category || category === "all" || t.category === category) &&
-      (!q ||
-        t.name.toLowerCase().includes(q.toLowerCase()) ||
-        t.description.toLowerCase().includes(q.toLowerCase())),
+      (includesFold(t.name, q) || includesFold(t.description, q)),
   );
   const total = list.length;
   const start = (page - 1) * pageSize;

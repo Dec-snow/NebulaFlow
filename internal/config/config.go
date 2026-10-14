@@ -59,8 +59,19 @@ type Config struct {
 	UseRedisQueue       bool
 	TaskTimeoutSec      int
 	DefaultMaxRetry     int
+	// WorkflowLockScope 是执行锁的粒度：task（默认）/ workflow / off。
+	//
+	// 默认 task 而不是 workflow —— 见 internal/scheduler.LockScope 的说明：
+	// 按工作流加锁会把"同一任务不被两个实例重复执行"退化成"整条工作流串行"，
+	// 同一二进制只改锁的受控压测里吞吐从 493.5 tasks/s 掉到 8.9 tasks/s。
+	WorkflowLockScope string
 	RateLimitPerMin     int // 每用户每分钟全局 API 调用上限（<=0 不限制）
 	TaskRateLimitPerMin int // 每用户每分钟任务提交上限（<=0 不限制）
+	// AuthRateLimitPerMin 是 /api/auth/{register,login} 每分钟、每 (IP, 用户名)
+	// 的尝试上限。默认 10 —— 这两个接口原本完全没有限流，在线撞库只受
+	// bcrypt（约 60ms/次）约束，等于把 auth 包里那套"防用户名枚举的时间侧信道"
+	// 缓解整个抵消掉。
+	AuthRateLimitPerMin int
 	CORSOrigins         string
 	// StorageMode 选择存储后端：
 	//   - postgres（默认）：PostgreSQL + Redis，生产形态
@@ -161,8 +172,10 @@ func FromEnv() *Config {
 		UseRedisQueue:         getEnvBool("USE_REDIS_QUEUE", true),
 		TaskTimeoutSec:        getEnvInt("TASK_TIMEOUT_SEC", 300),
 		DefaultMaxRetry:       getEnvInt("DEFAULT_MAX_RETRY", 2),
+		WorkflowLockScope:     getEnv("WORKFLOW_LOCK_SCOPE", "task"),
 		RateLimitPerMin:       getEnvInt("RATE_LIMIT_PER_MIN", 120),
 		TaskRateLimitPerMin:   getEnvInt("TASK_RATE_LIMIT_PER_MIN", 60),
+		AuthRateLimitPerMin:   getEnvInt("AUTH_RATE_LIMIT_PER_MIN", 10),
 		CORSOrigins:           getEnv("CORS_ORIGINS", "*"),
 		StorageMode:           getEnv("STORAGE_MODE", "postgres"),
 		OllamaURL:             getEnv("OLLAMA_URL", "http://localhost:11434"),

@@ -23,7 +23,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/api";
 import { useFetch } from "@/hooks";
-import { cn } from "@/lib/utils";
+import { cn, numberOrNull } from "@/lib/utils";
 
 const TONE_MAP: Record<string, string> = {
   DeepSeek: "brand",
@@ -41,16 +41,36 @@ export default function CostAnalysis() {
 
   if (error) return <ErrorState title="加载成本分析失败" description={error.message} onRetry={refresh} />;
 
-  const { byModel, byWorkflow, trend, trendLabels } = data;
+  const {
+    byModel: rawByModel,
+    byWorkflow: rawByWorkflow,
+    trend: rawTrend,
+    trendLabels: rawTrendLabels,
+  } = data;
 
-  const totalCost = byModel.reduce((sum, m) => sum + m.cost, 0);
-  const totalTokens = byModel.reduce((sum, m) => sum + m.tokensIn + m.tokensOut, 0);
-  const totalCalls = byModel.reduce((sum, m) => sum + m.calls, 0);
-  const avgCostPerTask = totalCost / byWorkflow.reduce((s, w) => s + w.tasks, 0);
+  // 聚合接口的四个数组都可能缺失（后端按维度聚合失败时返回 null），
+  // 直接 .reduce/.slice/.map 会抛 TypeError 或被 ErrorBoundary 兜住。
+  const byModel = Array.isArray(rawByModel) ? rawByModel : [];
+  const byWorkflow = Array.isArray(rawByWorkflow) ? rawByWorkflow : [];
+  const trend = Array.isArray(rawTrend) ? rawTrend : [];
+  const trendLabels = Array.isArray(rawTrendLabels) ? rawTrendLabels : [];
+
+  // 缺失字段按 0 计入汇总，避免整个表格变成 NaN
+  const totalCost = byModel.reduce((sum, m) => sum + (numberOrNull(m.cost) ?? 0), 0);
+  const totalTokens = byModel.reduce(
+    (sum, m) => sum + (numberOrNull(m.tokensIn) ?? 0) + (numberOrNull(m.tokensOut) ?? 0),
+    0,
+  );
+  const totalCalls = byModel.reduce((sum, m) => sum + (numberOrNull(m.calls) ?? 0), 0);
+  // 分母为 0 时不能做除法：否则渲染出 "¥Infinity" / "¥NaN"
+  const totalTasks = byWorkflow.reduce((s, w) => s + (numberOrNull(w.tasks) ?? 0), 0);
+  const avgCostPerTask = totalTasks > 0 ? totalCost / totalTasks : null;
+  // 聚合数组整体缺失时，求和结果只是"0"而不是真实值，按缺失渲染占位符
+  const hasModelRows = byModel.length > 0;
 
   const modelCostItems = byModel.map((m) => ({
     label: m.model,
-    value: m.cost,
+    value: numberOrNull(m.cost) ?? 0,
     tone: (TONE_MAP[m.provider] ?? "brand") as "brand" | "mint" | "sky" | "violet",
   }));
 
@@ -84,7 +104,7 @@ export default function CostAnalysis() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           label="总费用"
-          value={`¥${totalCost.toFixed(2)}`}
+          value={hasModelRows ? `¥${totalCost.toFixed(2)}` : "—"}
           delta={8.3}
           deltaGood="down"
           spark={trend.slice(-12)}
@@ -93,7 +113,7 @@ export default function CostAnalysis() {
         />
         <Stat
           label="Token 消耗"
-          value={(totalTokens / 1_000_000).toFixed(2)}
+          value={hasModelRows ? (totalTokens / 1_000_000).toFixed(2) : "—"}
           unit="M"
           delta={12.1}
           deltaGood="down"
@@ -102,7 +122,7 @@ export default function CostAnalysis() {
         />
         <Stat
           label="调用次数"
-          value={totalCalls.toLocaleString()}
+          value={hasModelRows ? totalCalls.toLocaleString() : "—"}
           unit="次"
           delta={5.7}
           deltaGood="up"
@@ -111,7 +131,7 @@ export default function CostAnalysis() {
         />
         <Stat
           label="单次均价"
-          value={`¥${avgCostPerTask.toFixed(4)}`}
+          value={avgCostPerTask !== null ? `¥${avgCostPerTask.toFixed(4)}` : "—"}
           delta={-2.4}
           deltaGood="down"
           tone="sky"
@@ -178,16 +198,16 @@ export default function CostAnalysis() {
                     </Badge>
                   </td>
                   <td className="tnum px-4 py-2.5 text-right text-fg-subtle">
-                    {m.tokensIn.toLocaleString()}
+                    {numberOrNull(m.tokensIn)?.toLocaleString() ?? "—"}
                   </td>
                   <td className="tnum px-4 py-2.5 text-right text-fg-subtle">
-                    {m.tokensOut.toLocaleString()}
+                    {numberOrNull(m.tokensOut)?.toLocaleString() ?? "—"}
                   </td>
                   <td className="tnum px-4 py-2.5 text-right text-fg-subtle">
-                    {m.calls.toLocaleString()}
+                    {numberOrNull(m.calls)?.toLocaleString() ?? "—"}
                   </td>
                   <td className="tnum px-5 py-2.5 text-right font-medium text-fg">
-                    ¥{m.cost.toFixed(2)}
+                    {numberOrNull(m.cost) !== null ? `¥${m.cost.toFixed(2)}` : "—"}
                   </td>
                 </tr>
               ))}
@@ -206,36 +226,49 @@ export default function CostAnalysis() {
         </div>
 
         <div className="px-2 pb-2">
-          {byWorkflow.map((w) => (
-            <div
-              key={w.id}
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"
-            >
-              <span className="tnum w-10 shrink-0 font-mono text-xs text-fg-subtle">
-                #{w.id}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs text-fg">{w.name}</span>
-              <span className="tnum hidden w-20 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {w.tasks.toLocaleString()} 次
-              </span>
-              <span className="tnum hidden w-20 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                ¥{w.avgCost.toFixed(3)}/次
-              </span>
-              <span
-                className={cn(
-                  "tnum flex w-16 shrink-0 items-center justify-end gap-1 text-2xs",
-                  w.trend >= 0 ? "text-rose" : "text-mint",
-                )}
+          {byWorkflow.map((w) => {
+            // 聚合字段（tasks / avgCost / trend / cost）可能整列缺失
+            const tasks = numberOrNull(w.tasks);
+            const avgCost = numberOrNull(w.avgCost);
+            const cost = numberOrNull(w.cost);
+            const trendPct = numberOrNull(w.trend);
+            return (
+              <div
+                key={w.id}
+                className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"
               >
-                {w.trend >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-                {Math.abs(w.trend).toFixed(1)}%
-              </span>
-              <span className="tnum w-20 shrink-0 text-right text-xs font-medium text-fg">
-                ¥{w.cost.toFixed(2)}
-              </span>
-              <ArrowUpRight size={12} className="text-fg-subtle" />
-            </div>
-          ))}
+                <span className="tnum w-10 shrink-0 font-mono text-xs text-fg-subtle">
+                  #{w.id}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs text-fg">{w.name}</span>
+                <span className="tnum hidden w-20 shrink-0 text-right text-2xs text-fg-subtle sm:block">
+                  {tasks !== null ? `${tasks.toLocaleString()} 次` : "—"}
+                </span>
+                <span className="tnum hidden w-20 shrink-0 text-right text-2xs text-fg-subtle sm:block">
+                  {avgCost !== null ? `¥${avgCost.toFixed(3)}/次` : "—"}
+                </span>
+                {trendPct !== null ? (
+                  <span
+                    className={cn(
+                      "tnum flex w-16 shrink-0 items-center justify-end gap-1 text-2xs",
+                      trendPct >= 0 ? "text-rose" : "text-mint",
+                    )}
+                  >
+                    {trendPct >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                    {Math.abs(trendPct).toFixed(1)}%
+                  </span>
+                ) : (
+                  <span className="tnum flex w-16 shrink-0 items-center justify-end text-2xs text-fg-subtle">
+                    —
+                  </span>
+                )}
+                <span className="tnum w-20 shrink-0 text-right text-xs font-medium text-fg">
+                  {cost !== null ? `¥${cost.toFixed(2)}` : "—"}
+                </span>
+                <ArrowUpRight size={12} className="text-fg-subtle" />
+              </div>
+            );
+          })}
         </div>
       </Card>
     </div>

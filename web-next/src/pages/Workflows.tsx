@@ -22,24 +22,42 @@ import {
 import { api } from "@/api";
 import { useDebounce, useFetch } from "@/hooks";
 import type { WorkflowSummary } from "@/types";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn, numberOrNull, timeAgo } from "@/lib/utils";
 
 /** 迷你 DAG 缩略图：把节点相对坐标映射到小视口，仅表达拓扑形状。 */
 function MiniDag({ wf }: { wf: WorkflowSummary }) {
+  // 列表接口不下发拓扑：后端的 workflow 列表是 `nodes,omitempty`（未 join
+  // workflow_nodes 时为 nil），也没有 mini/miniEdges 这种字段。
+  // 所以这里先兜底成空数组——否则 wf.mini.forEach 会直接抛 TypeError 白屏。
+  const mini = Array.isArray(wf.mini) ? wf.mini : [];
+  const miniEdges = Array.isArray(wf.miniEdges) ? wf.miniEdges : [];
+
   const pos = useMemo(() => {
     const m = new Map<string, { x: number; y: number }>();
-    wf.mini.forEach((n) => m.set(n.id, { x: 7 + (n.x / 100) * 86, y: 9 + (n.y / 100) * 42 }));
+    mini.forEach((n) => m.set(n.id, { x: 7 + (n.x / 100) * 86, y: 9 + (n.y / 100) * 42 }));
     return m;
-  }, [wf]);
+  }, [mini]);
 
-  const first = wf.mini[0]?.id;
-  const last = wf.mini[wf.mini.length - 1]?.id;
+  // 没有拓扑数据时给占位，而不是渲染一个永远空白的框
+  if (mini.length === 0) {
+    return (
+      <div className="dot-grid flex h-[104px] items-center justify-center rounded-lg border border-line bg-surface-2/50">
+        <span className="text-2xs text-fg-subtle">打开详情查看拓扑</span>
+      </div>
+    );
+  }
+
+  const first = mini[0]?.id;
+  const last = mini[mini.length - 1]?.id;
 
   return (
     <div className="dot-grid rounded-lg border border-line bg-surface-2/50">
       <svg viewBox="0 0 100 60" className="h-[104px] w-full" aria-hidden>
         {/* 连线 */}
-        {wf.miniEdges.map(([a, b], i) => {
+        {miniEdges.map((edge, i) => {
+          // 边的形状由接口决定：不是二元组时跳过，避免解构抛 TypeError
+          if (!Array.isArray(edge)) return null;
+          const [a, b] = edge;
           const p = pos.get(a);
           const q = pos.get(b);
           if (!p || !q) return null;
@@ -56,7 +74,7 @@ function MiniDag({ wf }: { wf: WorkflowSummary }) {
           );
         })}
         {/* 节点 */}
-        {wf.mini.map((n) => {
+        {mini.map((n) => {
           const p = pos.get(n.id)!;
           const isEnd = n.id === first || n.id === last;
           return (
@@ -78,6 +96,13 @@ function MiniDag({ wf }: { wf: WorkflowSummary }) {
 }
 
 function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
+  // 统计字段是后端列表接口的"期望值"而非承诺：没有就隐藏，
+  // 而不是渲染出 "undefined 节点" / "NaN%"。
+  const nodeCount = numberOrNull(wf.nodeCount);
+  const edgeCount = numberOrNull(wf.edgeCount);
+  const successRate = numberOrNull(wf.successRate);
+  const runs = numberOrNull(wf.runs);
+
   return (
     <Link to={`/workflows/${wf.id}`} className="group block">
       <Card hover className="flex h-full flex-col">
@@ -103,8 +128,9 @@ function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
         <div className="mt-4 flex items-center justify-between">
           <StatusBadge status={wf.status} />
           <div className="flex items-center gap-3 text-2xs text-fg-subtle">
-            <span className="tnum">{wf.nodeCount} 节点</span>
-            <span className="tnum">{wf.edgeCount} 连线</span>
+            {nodeCount !== null && <span className="tnum">{nodeCount} 节点</span>}
+            {edgeCount !== null && <span className="tnum">{edgeCount} 连线</span>}
+            {nodeCount === null && edgeCount === null && <span>拓扑未随列表下发</span>}
           </div>
         </div>
 
@@ -113,17 +139,21 @@ function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
         <div className="flex items-center justify-between text-2xs">
           <div className="flex items-center gap-1.5 text-fg-subtle">
             <TrendingUp size={12} />
-            <span className="tnum">{wf.runs} 次运行</span>
+            <span className="tnum">
+              {runs === null ? "运行数未知" : `${runs} 次运行`}
+            </span>
           </div>
           <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "tnum font-medium",
-                wf.successRate >= 98 ? "text-mint" : "text-amber",
-              )}
-            >
-              {wf.successRate}%
-            </span>
+            {successRate !== null && (
+              <span
+                className={cn(
+                  "tnum font-medium",
+                  successRate >= 98 ? "text-mint" : "text-amber",
+                )}
+              >
+                {successRate}%
+              </span>
+            )}
             <span className="text-fg-subtle">{timeAgo(wf.updatedAt)}</span>
           </div>
         </div>
@@ -146,11 +176,12 @@ export default function Workflows() {
     [filter, debouncedQ],
   );
 
-  const list = data?.items ?? [];
-  const total = data?.total ?? 0;
+  // 列表接口不一定下发 items / total（分页字段缺失时后端可能只回数组本身）
+  const list = Array.isArray(data?.items) ? data.items : [];
+  const total = numberOrNull(data?.total) ?? 0;
 
   // 计算各状态数量（用全量数据近似，实际应由后端返回）
-  const allList = data?.items ?? [];
+  const allList = list;
   const counts = {
     all: total,
     published: allList.filter((w) => w.status === "published").length,

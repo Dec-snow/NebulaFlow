@@ -73,6 +73,13 @@ type Config struct {
 	RateLimitPerMin int
 	// TaskRateLimitPerMin 每用户每分钟的任务提交上限，<=0 表示不限制。
 	TaskRateLimitPerMin int
+	// AuthRateLimitPerMin 是 /api/auth/{register,login} 每分钟、
+	// 每个「客户端 IP + 用户名」组合的上限。
+	//
+	// 与上面两个按 **user** 计数的限流是不同维度：认证接口发生在拿到用户之前，
+	// 只能按 IP（挡扫描）+ 用户名（避免 NAT 后面的正常用户被邻居连累）来计数。
+	// <=0 时取默认值（10），照例不做成"关闭"——认证接口不该有无限流的配置项。
+	AuthRateLimitPerMin int
 	// WorkerCount 用于 Dashboard 展示 workers 20/20。
 	WorkerCount int
 }
@@ -91,6 +98,9 @@ func (c *Config) withDefaults() Config {
 	if out.TaskRateLimitPerMin <= 0 {
 		out.TaskRateLimitPerMin = 60
 	}
+	if out.AuthRateLimitPerMin <= 0 {
+		out.AuthRateLimitPerMin = 10
+	}
 	if out.WorkerCount <= 0 {
 		out.WorkerCount = 1
 	}
@@ -104,13 +114,13 @@ func (s *Server) Router() *gin.Engine {
 	r.Use(gin.Recovery())
 	// tracing 放在最前面：它要包住后续所有中间件（含认证与限流），
 	// 否则"401 是哪个环节拒的"就没有任何链路信息。
-	r.Use(tracingMiddleware(s.tracing))
+	r.Use(tracingMiddleware(s.tracing, s.auth))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(metricsMiddleware(s.metrics))
 
 	// 健康检查与指标
 	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "nebulaflow"})
+		writeJSON(c, http.StatusOK, gin.H{"status": "ok", "service": "nebulaflow"})
 	})
 	if s.reg != nil {
 		h := promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{})
@@ -120,11 +130,11 @@ func (s *Server) Router() *gin.Engine {
 	// 前端静态资源：web-next/dist 存在时由后端直接托管（单端口一站式访问）
 	r.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
-			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
+			abortJSON(c, http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
 			return
 		}
 		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "not found"})
+			abortJSON(c, http.StatusNotFound, gin.H{"error": "not found"})
 			return
 		}
 		dist := "web-next/dist"
@@ -157,8 +167,15 @@ func (s *Server) Router() *gin.Engine {
 
 	authGroup := r.Group("/api/auth")
 	{
-		authGroup.POST("/register", authH.register)
-		authGroup.POST("/login", authH.login)
+		// 注册/登录是**唯一不需要 token 的写入口**，因此必须自己去挡暴力破解：
+		// 它们发生在拿到 user 之前，而全局的 rateLimitMiddleware 按 user 计数
+		// （u == nil 时直接放行），对它们完全不起作用。没有这一层，攻击者可以
+		// 无限次猜密码——每次都是 401，监控上不产生任何 5xx，看起来"系统很健康"。
+		authLimit := authRateLimitMiddleware(s.limiter, cfg.AuthRateLimitPerMin)
+		authGroup.POST("/register", authLimit, authH.register)
+		authGroup.POST("/login", authLimit, authH.login)
+		// /me 刻意不加：它是已认证的只读接口，按 IP 限流会误伤同一个 NAT 后面的
+		// 整个办公室（前端启动时就会拉一次），而且它本来就受全局用户级限流覆盖。
 		authGroup.GET("/me", authMiddleware(s.auth), authH.me)
 	}
 

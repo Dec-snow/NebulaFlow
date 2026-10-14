@@ -60,6 +60,13 @@ func (s *Scheduler) ExecuteNode(ctx context.Context, j worker.NodeJob) (worker.N
 
 	res.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
+		// 审批挂起不是失败：节点状态已经由 runApprovalNode 写成 waiting，
+		// 这里再写一次 failed 会覆盖它（后写覆盖先写），还会推一条 node_failed 事件。
+		// 叠加恢复逻辑把 failed 当终态，后果是"等待审批"会在任何一次消息重投时
+		// 变成"任务失败"，人工审批入口彻底失效。
+		if errors.Is(err, errApprovalWaiting) {
+			return res, err
+		}
 		// 区分"被取消"与"真失败"：context.Canceled 来自用户取消任务，
 		// DeadlineExceeded 才是超时。两者混为一谈，取消后的节点会显示成失败，
 		// 用户会以为自己的流程有 bug。

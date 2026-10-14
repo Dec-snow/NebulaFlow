@@ -12,6 +12,27 @@ jobs:
   test:
     name: Lint & Test
     runs-on: ubuntu-latest
+
+    # PG 服务是本次新增的：internal/store 的知识库/任务 SQL 长期零 PG 覆盖，
+    # 于是 documents.chunks/size_kb/error_message 三列从没进过 001_init.sql、
+    # KeywordSearch 引用了 document_chunks.knowledge_base_id 与 documents.indexed
+    # 两个不存在的列、CreateTask 整条 INSERT 漏了 priority——全部只在 PG 模式下炸，
+    # 内存实现的单测一路全绿。起一个真库跑集成用例，这类漂移才拦得住。
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: nebula
+          POSTGRES_PASSWORD: nebula
+          POSTGRES_DB: nebulaflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nebula -d nebulaflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +47,30 @@ jobs:
 
       - name: Go test
         run: go test -cover ./...
+
+      # 这里曾经有一段 psql bootstrap：先把 agent_memory.embedding_v 建成 vector(384)，
+      # 绕过「004 在无维度 vector 列上建 HNSW 索引导致空库迁移失败」这个缺陷。
+      # 缺陷本身已修（HNSW 索引改由 Go 侧 EnsureVectorSchema 按 EMBED_DIM 建），
+      # 绕过去就等于永远测不到，所以整段删除——现在由
+      # internal/database 的 TestMigrateOnBrandNewDatabase 在一个全新库上把迁移跑通。
+      # 集成用例：默认在没有 NEBULA_TEST_DSN 时 skip，这里显式给 DSN 让它们真跑。
+      # MultiTenant 用例会造 5 万分块 / 20 个知识库来验证 HNSW 全局索引下的召回
+      # （规模不够时规划器不会选 HNSW，用例会因「前提不成立」失败而不是静默通过），
+      # 所以这一步大约 3 分钟。
+      - name: Go integration tests (real PostgreSQL + pgvector)
+        env:
+          NEBULA_TEST_DSN: "postgres://nebula:nebula@127.0.0.1:5432/nebulaflow?sslmode=disable"
+        run: |
+          go test ./internal/store/... \
+            -run 'MultiTenant|Knowledge|Document|TaskPriority|Hybrid' \
+            -v -count=1
+
+      # 空库迁移必须一次跑通：上面那段 bootstrap 掩盖的正是这条路径。
+      - name: Go migration test on a brand-new database
+        env:
+          NEBULA_TEST_DSN: "postgres://nebula:nebula@127.0.0.1:5432/nebulaflow?sslmode=disable"
+        run: |
+          go test ./internal/database/... -run 'BrandNewDatabase' -v -count=1
 
       - name: Set up Node
         uses: actions/setup-node@v4

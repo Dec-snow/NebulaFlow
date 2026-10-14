@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -267,11 +268,25 @@ func (r *KnowledgeRepo) SearchChunks(ctx context.Context, kbID int64, queryVec [
 //   - GIN 索引加速匹配
 //
 // 为什么用 tsvector 而不是自己实现 BM25：
-//   1. PG 内置，零依赖，开箱即用
-//   2. GIN 索引高效，亿级文档也能跑
-//   3. ts_rank 已经是 BM25 的近似实现
+//  1. PG 内置，零依赖，开箱即用
+//  2. GIN 索引高效，亿级文档也能跑
+//  3. ts_rank 已经是 BM25 的近似实现
 //
 // Score 归一化到 0~1（除以最高分），便于和向量检索做 RRF 融合。
+//
+// 关于过滤条件的修正（真实 PG 16 上复现过）：原 SQL 写的是
+//
+//	WHERE dc.knowledge_base_id = $1 AND d.indexed = true
+//
+// 而 document_chunks 根本没有 knowledge_base_id 列（归属在 documents 上），
+// documents 也没有 indexed 列（状态列叫 status，取值 'indexed'）。
+// 两处都是不存在的列，所以这一路在 PG 模式下 100% 报错：
+//
+//	ERROR: column dc.knowledge_base_id does not exist (SQLSTATE 42703)
+//
+// 后果不是 500 而是**静默降级**：HybridRetrieve 只在"两路都失败"时才返回错误，
+// 关键词那一路全挂时 RRF 就悄悄退化成纯向量检索——检索质量下降，日志里一片安静。
+// 写法对齐同一文件里 SearchChunks 的正确参照（WHERE d.knowledge_base_id = $1）。
 func (r *KnowledgeRepo) KeywordSearch(ctx context.Context, kbID int64, query string, k int) ([]model.DocumentChunk, error) {
 	if k <= 0 {
 		k = 5
@@ -286,13 +301,16 @@ func (r *KnowledgeRepo) KeywordSearch(ctx context.Context, kbID int64, query str
 		       ts_rank(dc.content_tsv, plainto_tsquery('simple', $2)) AS score
 		FROM document_chunks dc
 		JOIN documents d ON d.id = dc.document_id
-		WHERE dc.knowledge_base_id = $1
+		WHERE d.knowledge_base_id = $1
 		  AND dc.content_tsv @@ plainto_tsquery('simple', $2)
-		  AND d.indexed = true
+		  AND d.status = 'indexed'
 		ORDER BY score DESC
 		LIMIT $3`, kbID, q, k,
 	)
 	if err != nil {
+		// 关键词检索失败必须留痕：上层 HybridRetrieve 只在两路都失败时才报错，
+		// 这一路静默失败会让 RRF 悄悄退化成纯向量检索（检索变差但没有任何信号）。
+		slog.Warn("keyword search failed", "kb_id", kbID, "error", err)
 		return nil, fmt.Errorf("keyword search: %w", err)
 	}
 	defer rows.Close()

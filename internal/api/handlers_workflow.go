@@ -41,7 +41,7 @@ func (h *workflowHandler) create(c *gin.Context) {
 	u := getUser(c)
 	var p workflowPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	wf := model.Workflow{
@@ -63,14 +63,14 @@ func (h *workflowHandler) create(c *gin.Context) {
 	}
 	// 保存前校验 DAG 合法性（环/悬挂边）
 	if _, err := scheduler.BuildDAG(wf.Nodes, wf.Edges); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid workflow: " + err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": "invalid workflow: " + err.Error()})
 		return
 	}
 	if err := h.store.Workflows.CreateWorkflow(c.Request.Context(), &wf); err != nil {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, wf)
+	writeJSON(c, http.StatusCreated, wf)
 }
 
 // GET /api/workflows
@@ -81,7 +81,7 @@ func (h *workflowHandler) list(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"workflows": list})
+	writeJSON(c, http.StatusOK, gin.H{"workflows": list})
 }
 
 // GET /api/workflows/:id
@@ -93,7 +93,7 @@ func (h *workflowHandler) get(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, wf)
+	writeJSON(c, http.StatusOK, wf)
 }
 
 // PUT /api/workflows/:id
@@ -102,7 +102,7 @@ func (h *workflowHandler) update(c *gin.Context) {
 	id := mustID(c)
 	var p workflowPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	wf := model.Workflow{
@@ -121,14 +121,14 @@ func (h *workflowHandler) update(c *gin.Context) {
 	}
 	// 保存前校验 DAG 合法性
 	if _, err := scheduler.BuildDAG(wf.Nodes, wf.Edges); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid workflow: " + err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": "invalid workflow: " + err.Error()})
 		return
 	}
 	if err := h.store.Workflows.UpdateWorkflow(c.Request.Context(), &wf); err != nil {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, wf)
+	writeJSON(c, http.StatusOK, wf)
 }
 
 // DELETE /api/workflows/:id
@@ -139,7 +139,7 @@ func (h *workflowHandler) delete(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"deleted": id})
+	writeJSON(c, http.StatusOK, gin.H{"deleted": id})
 }
 
 // ---------- 模板市场 ----------
@@ -153,7 +153,7 @@ func (h *workflowHandler) listTemplates(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"templates": list, "total": len(list)})
+	writeJSON(c, http.StatusOK, gin.H{"templates": list, "total": len(list)})
 }
 
 // GET /api/templates/:id —— 模板详情（含节点/边，用于预览）
@@ -168,7 +168,7 @@ func (h *workflowHandler) getTemplate(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, wf)
+	writeJSON(c, http.StatusOK, wf)
 }
 
 // POST /api/templates/:id/use —— 从模板创建工作流（一键使用）
@@ -187,7 +187,7 @@ func (h *workflowHandler) useTemplate(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{
+	writeJSON(c, http.StatusCreated, gin.H{
 		"workflow_id": newWF.ID,
 		"name":        newWF.Name,
 		"message":     "已从模板创建工作流",
@@ -203,7 +203,7 @@ func (h *workflowHandler) listCategories(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"categories": categories})
+	writeJSON(c, http.StatusOK, gin.H{"categories": categories})
 }
 
 func orDefault(s, def string) string {
@@ -213,10 +213,16 @@ func orDefault(s, def string) string {
 	return s
 }
 
+// mustID 解析 `:id` 路径参数。
+//
+// 解析失败时写 400 并返回 0 —— 注意**调用方仍然会继续往下执行**
+// （Go 里没法让被调函数提前结束调用方），所以真正的防线是响应写出的守卫
+// （见 middleware.go 的 writeJSON / abortJSON）：第一个响应写出之后，
+// 后续任何写入都会被丢弃，body 里永远只有一个 JSON。
 func mustID(c *gin.Context) int64 {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid id parameter"})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": "invalid id parameter"})
 		return 0
 	}
 	return id

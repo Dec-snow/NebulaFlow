@@ -28,7 +28,7 @@ import {
 import { api } from "@/api";
 import { useFetch } from "@/hooks";
 import type { ActivityKind } from "@/types";
-import { clockOf, cn } from "@/lib/utils";
+import { clockOf, cn, numberOrNull } from "@/lib/utils";
 
 /** 活动流列表最大保留条数，超出截断（避免长时间运行后内存膨胀） */
 const ACTIVITY_MAX_ITEMS = 200;
@@ -59,17 +59,36 @@ export default function Dashboard() {
   if (error) return <ErrorState title="加载控制台数据失败" description={error.message} onRetry={refresh} />;
 
   const {
-    kpis,
-    throughput,
-    throughputLabels,
-    workerStats,
-    tokenByProvider,
-    activity: rawActivity,
-    recentTasks,
+    kpis: rawKpis,
+    throughput: rawThroughput,
+    throughputLabels: rawThroughputLabels,
+    workerStats: rawWorkerStats,
+    tokenByProvider: rawTokenByProvider,
+    activity: rawActivityData,
+    recentTasks: rawRecentTasks,
   } = data;
+
+  // 接口可能整个不下发某个数组（后端的 nodes / documents / tokens 都是 omitempty），
+  // 直接 .map/.slice/.reduce 会抛 TypeError，把整页交给 ErrorBoundary —— 这正是
+  // 线上 Dashboard 白屏的同一类成因。数组一律先收成数组。
+  const kpis = Array.isArray(rawKpis) ? rawKpis : [];
+  const throughput = Array.isArray(rawThroughput) ? rawThroughput : [];
+  const throughputLabels = Array.isArray(rawThroughputLabels) ? rawThroughputLabels : [];
+  const tokenByProvider = Array.isArray(rawTokenByProvider) ? rawTokenByProvider : [];
+  const rawActivity = Array.isArray(rawActivityData) ? rawActivityData : [];
+  const recentTasks = Array.isArray(rawRecentTasks) ? rawRecentTasks : [];
+  const workerStats = rawWorkerStats ?? {};
 
   // 活动流最多保留 200 条，超出截断
   const activity = rawActivity.slice(0, ACTIVITY_MAX_ITEMS);
+
+  // 统计数值缺失时渲染占位符，而不是 "undefined" / "NaN" / "-Infinity"
+  const activeWorkers = numberOrNull(workerStats.active);
+  const totalWorkers = numberOrNull(workerStats.total);
+  const utilization = numberOrNull(workerStats.utilization);
+  const queued = numberOrNull(workerStats.queued);
+  const queueCapacity = numberOrNull(workerStats.queueCapacity);
+  const peak = throughput.length > 0 ? Math.max(...throughput) : null;
 
   return (
     <div className="space-y-7">
@@ -103,7 +122,7 @@ export default function Dashboard() {
           <Stat
             key={k.key}
             label={k.label}
-            value={k.value?.toLocaleString() ?? "—"}
+            value={numberOrNull(k.value)?.toLocaleString() ?? "—"}
             unit={k.unit}
             delta={k.delta}
             deltaGood={k.deltaGood}
@@ -119,7 +138,7 @@ export default function Dashboard() {
         <Card className="lg:col-span-2">
           <CardHeader
             title="任务吞吐量"
-            subtitle={`按小时统计 · 峰值 ${Math.max(...throughput)} 个任务`}
+            subtitle={`按小时统计 · 峰值 ${peak ?? "—"} 个任务`}
             action={
               <Badge tone="mint">
                 <StatusDot tone="mint" />
@@ -131,18 +150,18 @@ export default function Dashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Worker 利用率" subtitle={`${workerStats.active} / ${workerStats.total} 活跃`} />
+          <CardHeader title="Worker 利用率" subtitle={`${activeWorkers ?? "—"} / ${totalWorkers ?? "—"} 活跃`} />
           <div className="flex flex-col items-center gap-5 py-2">
             <RingProgress
-              value={workerStats.utilization}
+              value={utilization ?? 0}
               tone="brand"
-              label={`${Math.round(workerStats.utilization * 100)}%`}
+              label={utilization !== null ? `${Math.round(utilization * 100)}%` : "—"}
               sublabel="已占用"
             />
             <div className="w-full space-y-0.5">
-              <MiniStat label="活跃 worker" value={workerStats.active} tone="brand" />
-              <MiniStat label="池内排队" value={workerStats.queued} tone="sky" />
-              <MiniStat label="队列容量" value={workerStats.queueCapacity} />
+              <MiniStat label="活跃 worker" value={activeWorkers ?? "—"} tone="brand" />
+              <MiniStat label="池内排队" value={queued ?? "—"} tone="sky" />
+              <MiniStat label="队列容量" value={queueCapacity ?? "—"} />
               <MiniStat label="P95 排队等待" value="18ms" tone="mint" />
             </div>
           </div>
@@ -164,7 +183,9 @@ export default function Dashboard() {
           />
           <div className="scrollbar-none max-h-[268px] space-y-1 overflow-y-auto pr-1">
             {activity.map((item) => {
-              const Icon = KIND_ICON[item.kind];
+              // kind 可能不在枚举内：没有兜底时 <Icon/> 的 type 是 undefined，
+              // React 会直接抛 "Element type is invalid"。
+              const Icon = KIND_ICON[item.kind] ?? Zap;
               return (
                 <div
                   key={item.id}
@@ -173,7 +194,7 @@ export default function Dashboard() {
                   <div
                     className={cn(
                       "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md",
-                      KIND_TONE[item.kind],
+                      KIND_TONE[item.kind] ?? "bg-surface-3 text-fg-muted",
                     )}
                   >
                     <Icon size={12.5} />
@@ -224,25 +245,31 @@ export default function Dashboard() {
         </div>
 
         <div className="px-2 pb-2">
-          {recentTasks.map((t) => (
-            <Link
-              key={t.id}
-              to={`/tasks/${t.id}`}
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"
-            >
-              <span className="tnum w-14 shrink-0 font-mono text-xs text-fg-subtle">
-                #{t.id}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs text-fg">{t.workflow}</span>
-              <StatusBadge status={t.status} />
-              <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {t.durationMs >= 1000 ? `${(t.durationMs / 1000).toFixed(1)}s` : `${t.durationMs}ms`}
-              </span>
-              <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
-                {t.tokens?.toLocaleString() ?? "—"} tok
-              </span>
-            </Link>
-          ))}
+          {recentTasks.map((t) => {
+            // 后端的 task 没有 duration_ms / tokens 这类汇总字段（只有 task_node 上有），
+            // 缺失时渲染占位符，而不是 "undefinedms" / "NaN"。
+            const dur = numberOrNull(t.durationMs);
+            const tokens = numberOrNull(t.tokens);
+            return (
+              <Link
+                key={t.id}
+                to={`/tasks/${t.id}`}
+                className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-surface-2"
+              >
+                <span className="tnum w-14 shrink-0 font-mono text-xs text-fg-subtle">
+                  #{t.id}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs text-fg">{t.workflow}</span>
+                <StatusBadge status={t.status} />
+                <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
+                  {dur === null ? "—" : dur >= 1000 ? `${(dur / 1000).toFixed(1)}s` : `${dur}ms`}
+                </span>
+                <span className="tnum hidden w-16 shrink-0 text-right text-2xs text-fg-subtle sm:block">
+                  {tokens?.toLocaleString() ?? "—"} tok
+                </span>
+              </Link>
+            );
+          })}
         </div>
       </Card>
     </div>

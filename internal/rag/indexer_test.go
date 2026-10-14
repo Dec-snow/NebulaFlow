@@ -2,8 +2,10 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -364,6 +366,89 @@ func TestIndexer_EnqueueAfterShutdown(t *testing.T) {
 	doc := createTestDoc(t, ms, 1, "post-shutdown doc")
 	if err := idx.Enqueue(doc); err != ErrIndexerStopped {
 		t.Fatalf("enqueue after shutdown should return ErrIndexerStopped, got %v", err)
+	}
+}
+
+// ---------- Enqueue / Shutdown 竞态压测 ----------
+
+// TestIndexer_EnqueueShutdownRace 高频压测"多生产者持续 Enqueue + 主协程 Shutdown"。
+//
+// 对应缺陷：原实现 Shutdown 里 `close(idx.queue)`，而 Enqueue 先查 stopped、
+// 再往队列里发，两步之间没有任何互斥。上传文档的 HTTP handler 直接调用
+// Enqueue，所以关服那一瞬间正在上传的用户会命中
+// `panic: send on closed channel`，把整个进程打崩。
+//
+// 修复后必须成立：
+//  1. 全程不 panic；
+//  2. 关闭完成后 Enqueue 稳定返回 ErrIndexerStopped（既不 panic 也不静默吞掉）；
+//  3. 队列满时仍然是 ErrIndexQueueFull（原有语义不被破坏）。
+func TestIndexer_EnqueueShutdownRace(t *testing.T) {
+	const (
+		producers = 8  // 模拟 8 个并发上传
+		rounds    = 20 // 重复多轮，避免"碰巧没撞上"
+		queueSize = 8  // 队列小一点，让生产者一直处于"发送窗口"里
+	)
+
+	for round := 0; round < rounds; round++ {
+		idx, _ := newTestIndexer(t, 2, queueSize)
+		idx.Start()
+
+		stop := make(chan struct{})
+		var wg sync.WaitGroup
+		for p := 0; p < producers; p++ {
+			wg.Add(1)
+			go func(pid int) {
+				defer wg.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					doc := &model.Document{
+						KnowledgeBaseID: 1,
+						Filename:        "race.txt",
+						Status:          model.DocPending,
+						Content:         "race condition document",
+					}
+					err := idx.Enqueue(doc)
+					switch {
+					case err == nil:
+					case errors.Is(err, ErrIndexQueueFull):
+					case errors.Is(err, ErrIndexerStopped):
+					default:
+						t.Errorf("round %d producer %d: unexpected Enqueue error: %v", round, pid, err)
+						return
+					}
+				}
+			}(p)
+		}
+
+		// 让生产者先跑起来，抬高与 Shutdown 的重叠窗口
+		time.Sleep(2 * time.Millisecond)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := idx.Shutdown(ctx)
+		cancel()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("round %d: Shutdown error: %v", round, err)
+		}
+
+		close(stop)
+		wg.Wait()
+
+		// 关闭之后必须稳定失败：不能随机成功，也不能 panic。
+		for i := 0; i < 200; i++ {
+			err := idx.Enqueue(&model.Document{
+				KnowledgeBaseID: 1,
+				Filename:        "after-shutdown.txt",
+				Status:          model.DocPending,
+			})
+			if !errors.Is(err, ErrIndexerStopped) {
+				t.Fatalf("round %d: Enqueue after Shutdown #%d = %v, want ErrIndexerStopped",
+					round, i, err)
+			}
+		}
 	}
 }
 

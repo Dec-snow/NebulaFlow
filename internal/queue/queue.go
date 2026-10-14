@@ -101,6 +101,22 @@ type Admitter interface {
 	Admit(ctx context.Context) error
 }
 
+// DelayNacker 是队列实现「可选」暴露的"按指定延迟重投"能力。
+//
+// 为什么需要它：Nack 的语义是"这次尝试失败了，按退避策略再试"，
+// 延迟由队列自己按 Attempt 指数放大。但有一类重投**根本不是失败**：
+// 分布式锁被别的实例占着（"还没轮到我"）。对它用指数退避是错的——
+// 同一个工作流的任务会互相把对方推得越来越远，实测在 Redis 后端上
+// 退避能涨到 5 分钟封顶，任务表现为"提交后几分钟才出结果"。
+//
+// 调用方需要能说"过 500ms 再来问一次，别把它当失败". 所以做成可选接口：
+// 实现得了就用精确延迟，实现不了就退回 Nack 的老行为（见 scheduler 里的断言）。
+type DelayNacker interface {
+	// NackAfter 与 Nack 相同，但重投延迟由调用方指定（delay <= 0 时退回队列自己的退避）。
+	// 传入显式 delay 时**不消耗/不推进**任务的 Attempt——"等锁"不是一次执行尝试。
+	NackAfter(ctx context.Context, msgID string, errMsg string, retryLeft int, delay time.Duration) error
+}
+
 // ---------- Redis Stream 实现 ----------
 
 // 容量水位默认值。
@@ -131,6 +147,10 @@ type Options struct {
 	//   0  → 用默认值 0.8
 	//   <0 → **关闭准入控制**（只用于压测对照，生产不要关）
 	AdmitRatio float64
+	// RecoverMinIdle 是崩溃恢复认领 pending 消息的最小空闲时长。
+	// 应当 > TASK_TIMEOUT_SEC（见 RedisStreamQueue.recoverMinIdle 的说明）；
+	// <= 0 时用 30s 兜底。
+	RecoverMinIdle time.Duration
 }
 
 type RedisStreamQueue struct {
@@ -147,6 +167,13 @@ type RedisStreamQueue struct {
 	// admitLimit 是准入阈值（绝对条数）。达到它就拒绝新提交，而不是等 MAXLEN 去裁。
 	// <= 0 表示关闭准入控制。
 	admitLimit int64
+	// recoverMinIdle 是崩溃恢复认领 pending 消息的最小空闲时长。
+	//
+	// 它必须**大于任务最长执行时间**，否则滚动发布/扩容时 XAUTOCLAIM 会把
+	// 别的实例正在跑的长任务当成"遗留"重新投递 → 同一任务被两个消费者并发执行
+	// （重复 LLM 计费、重复副作用、task_nodes 互相覆盖）。
+	// <= 0 时用 30s 兜底（库默认值，仅适合短任务）。
+	recoverMinIdle time.Duration
 }
 
 const defaultGroup = "nebula_workers"
@@ -157,6 +184,10 @@ func NewRedisStreamQueue(rdb *redis.Client, stream string, opt Options) (*RedisS
 	}
 	if opt.DLQMaxLen <= 0 {
 		opt.DLQMaxLen = defaultDLQMaxLen
+	}
+	recoverMinIdle := opt.RecoverMinIdle
+	if recoverMinIdle <= 0 {
+		recoverMinIdle = 30 * time.Second
 	}
 	admitLimit := int64(0) // <=0 表示关闭准入
 	switch {
@@ -181,6 +212,7 @@ func NewRedisStreamQueue(rdb *redis.Client, stream string, opt Options) (*RedisS
 		maxLen:     opt.MaxLen,
 		dlqMaxLen:  opt.DLQMaxLen,
 		admitLimit: admitLimit,
+		recoverMinIdle: recoverMinIdle,
 	}
 	if err := q.rdb.XGroupCreateMkStream(context.Background(), q.stream, q.group, "0").Err(); err != nil && !isBusyGroup(err) {
 		return nil, fmt.Errorf("create consumer group: %w", err)
@@ -414,28 +446,68 @@ func (q *RedisStreamQueue) Ack(ctx context.Context, msgID string) error {
 // 正确做法：用一个 ZSET 当作延迟队列，score 是到期时间戳；
 // 到期的条目在 Dequeue 前被重新 XADD 回主 stream 真正投递。
 func (q *RedisStreamQueue) Nack(ctx context.Context, msgID string, errMsg string, retryLeft int) error {
-	var payload string
-	if msgID != "" {
-		msgs, err := q.rdb.XRange(ctx, q.stream, msgID, msgID).Result()
-		if err == nil && len(msgs) > 0 {
-			payload, _ = msgs[0].Values["payload"].(string)
-		}
+	return q.nack(ctx, msgID, errMsg, retryLeft, 0)
+}
+
+// NackAfter 按调用方指定的延迟重投（见 DelayNacker）。
+func (q *RedisStreamQueue) NackAfter(ctx context.Context, msgID string, errMsg string, retryLeft int, delay time.Duration) error {
+	return q.nack(ctx, msgID, errMsg, retryLeft, delay)
+}
+
+// nack 是 Nack / NackAfter 的共同实现。delay > 0 表示调用方指定的精确延迟。
+func (q *RedisStreamQueue) nack(ctx context.Context, msgID string, errMsg string, retryLeft int, delay time.Duration) error {
+	payload, err := q.payloadOf(ctx, msgID)
+	if err != nil {
+		// 原实现把这里 XRANGE 的错误吞掉了（`err == nil && len(msgs) > 0`），
+		// 于是"查不到消息"和"Redis 抖了一下"变成同一种结果，调用方永远不知道
+		// 自己以为已经重投的消息其实没重投。Redis 故障必须往上报。
+		return fmt.Errorf("nack %s: read payload: %w", msgID, err)
 	}
 	if payload == "" {
-		payload = "{}"
+		// 消息本体已经不在了：多半是被 MAXLEN ~ 裁掉了（XACK 只移出 PEL，不删本体；
+		// 而 MAXLEN 裁的正是尚未投递的最老条目）。
+		//
+		// 原实现在这里伪造一个 payload = "{}"：retryLeft>0 时会往主队列塞一条
+		// TaskID=0 的幽灵消息（消费者取到只会判"任务不存在"），retryLeft<=0 时
+		// 往 DLQ 写一条 payload 为 {} 的垃圾。两种结果都把"任务丢了"伪装成
+		// "重投成功了"。正确做法：把 msgID 原样记进 DLQ 留证据，
+		// 确认掉这条永远救不回来的消息（不确认的话它会永久占着 PEL，
+		// 把 TrimConsumed 的安全位点钉死，队列再也不能回收），然后返回错误。
+		meta := map[string]any{
+			"payload":   "",
+			"msg_id":    msgID,
+			"error":     errMsg,
+			"reason":    "message body missing (trimmed by MAXLEN or already deleted); cannot requeue",
+			"failed_at": time.Now().UnixMilli(),
+		}
+		if dlqErr := q.xadd(ctx, q.dlq, q.dlqMaxLen, meta); dlqErr != nil {
+			return fmt.Errorf("nack %s: payload missing and dlq write failed: %w", msgID, dlqErr)
+		}
+		if ackErr := q.Ack(ctx, msgID); ackErr != nil {
+			return fmt.Errorf("nack %s: payload missing, ack failed: %w", msgID, ackErr)
+		}
+		return fmt.Errorf("nack %s: message payload missing, task lost (recorded in dlq): %s", msgID, errMsg)
 	}
 
 	if retryLeft > 0 {
 		var j Job
-		_ = json.Unmarshal([]byte(payload), &j)
-		j.Attempt++
+		if err := json.Unmarshal([]byte(payload), &j); err != nil {
+			// 坏 payload 不该被原样复制：它会在重投后再次解析失败，无限循环。
+			return fmt.Errorf("nack %s: unmarshal payload: %w", msgID, err)
+		}
+		// 只有"真的尝试过执行"（delay<=0，走退避）才推进 Attempt；
+		// 调用方指定的固定延迟（等锁）不推进，否则退避会越滚越大。
+		if delay <= 0 {
+			j.Attempt++
+			delay = q.backoffFor(j.Attempt)
+		}
 		if b, err := json.Marshal(j); err == nil {
 			payload = string(b)
 		}
-		delay := q.backoffFor(j.Attempt)
-		score := float64(time.Now().Add(delay).UnixMilli())
+		dueAt := time.Now().Add(delay)
+		score := float64(dueAt.UnixMilli())
 		// 用 payload+到期时间做 member，保证同一条消息的重投记录可去重
-		member := fmt.Sprintf("%d:%s", time.Now().Add(delay).UnixMilli(), payload)
+		member := fmt.Sprintf("%d:%s", dueAt.UnixMilli(), payload)
 		if err := q.rdb.ZAdd(ctx, q.retry, redis.Z{Score: score, Member: member}).Err(); err != nil {
 			return err
 		}
@@ -447,6 +519,23 @@ func (q *RedisStreamQueue) Nack(ctx context.Context, msgID string, errMsg string
 		return err
 	}
 	return q.Ack(ctx, msgID)
+}
+
+// payloadOf 取出消息本体。查不到返回 ("", nil)——"消息不存在"与"Redis 报错"
+// 是两件必须分开的事：前者是数据丢了，后者是可以重试的基础设施故障。
+func (q *RedisStreamQueue) payloadOf(ctx context.Context, msgID string) (string, error) {
+	if msgID == "" {
+		return "", nil
+	}
+	msgs, err := q.rdb.XRange(ctx, q.stream, msgID, msgID).Result()
+	if err != nil {
+		return "", err
+	}
+	if len(msgs) == 0 {
+		return "", nil
+	}
+	payload, _ := msgs[0].Values["payload"].(string)
+	return payload, nil
 }
 
 // backoffFor 指数退避：1x, 2x, 4x ... baseRetry，上限 5 分钟。
@@ -529,34 +618,51 @@ func (q *RedisStreamQueue) Len(ctx context.Context) (int64, error) {
 // 使主循环的 XREADGROUP ">" 能再次投递（崩溃恢复真正生效）。
 func (q *RedisStreamQueue) Recover(ctx context.Context, workerID string, count int64) (int, error) {
 	_ = q.promoteDueRetries(ctx, count)
-	// go-redis v9 的 Result() 签名：(messages []XMessage, start string, err error)
-	msgs, _, err := q.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
-		Stream:   q.stream,
-		Group:    q.group,
-		Consumer: workerID,
-		MinIdle:  30 * time.Second,
-		Start:    "0",
-		Count:    count,
-	}).Result()
-	if err != nil {
-		return 0, err
+	if count <= 0 {
+		count = 16
 	}
-	n := 0
-	for _, m := range msgs {
-		payload, _ := m.Values["payload"].(string)
-		if payload == "" {
-			continue
+	// XAUTOCLAIM 一次最多返回 count 条，并给出**下一次的游标**。
+	// 原实现把游标丢掉、只认领一批：调度器只在 Run 开头调用一次 Recover，
+	// 于是超出的那部分消息在本进程生命周期内再也无人认领，
+	// 它们长期 pending 会把 TrimConsumed 的安全位点（XPENDING.Lower）钉死，
+	// 队列再也回收不掉已确认前缀。这里沿着游标把这一轮扫完。
+	// 轮数上限是防御性的：病态情况下不能让它无限占用启动时间。
+	const maxRounds = 8
+	start := "0"
+	total := 0
+	for round := 0; round < maxRounds; round++ {
+		// go-redis v9 的 Result() 签名：(messages, nextStart, err)
+		msgs, next, err := q.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   q.stream,
+			Group:    q.group,
+			Consumer: workerID,
+			MinIdle:  q.recoverMinIdle,
+			Start:    start,
+			Count:    count,
+		}).Result()
+		if err != nil {
+			return total, err
 		}
-		// 重新入队（新 ID），让 ">" 投递
-		if err := q.xadd(ctx, q.stream, q.maxLen, map[string]any{"payload": payload}); err != nil {
-			return n, err
+		for _, m := range msgs {
+			payload, _ := m.Values["payload"].(string)
+			if payload == "" {
+				continue
+			}
+			// 重新入队（新 ID），让 ">" 投递
+			if err := q.xadd(ctx, q.stream, q.maxLen, map[string]any{"payload": payload}); err != nil {
+				return total, err
+			}
+			if err := q.rdb.XAck(ctx, q.stream, q.group, m.ID).Err(); err != nil {
+				return total, err
+			}
+			total++
 		}
-		if err := q.rdb.XAck(ctx, q.stream, q.group, m.ID).Err(); err != nil {
-			return n, err
+		if next == "" || next == "0-0" || len(msgs) == 0 {
+			break
 		}
-		n++
+		start = next
 	}
-	return n, nil
+	return total, nil
 }
 
 func (q *RedisStreamQueue) slogWarn(msg string) { _ = msg }
@@ -571,13 +677,20 @@ type InMemoryQueue struct {
 	mu       sync.Mutex
 	seq      uint64
 	inflight map[string]Job
+	// stop 是队列自身的生命周期信号：延迟重投只受它约束，不受调用方 ctx 影响。
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 func NewInMemoryQueue(size int) *InMemoryQueue {
 	if size <= 0 {
 		size = 1024
 	}
-	return &InMemoryQueue{ch: make(chan Job, size), inflight: make(map[string]Job)}
+	return &InMemoryQueue{
+		ch:       make(chan Job, size),
+		inflight: make(map[string]Job),
+		stop:     make(chan struct{}),
+	}
 }
 
 func (q *InMemoryQueue) Name() string { return "in-memory" }
@@ -621,6 +734,24 @@ func (q *InMemoryQueue) Ack(_ context.Context, msgID string) error {
 
 // Nack 支持重投：retryLeft>0 时按指数退避重新入队，否则丢弃（等价于 DLQ）。
 func (q *InMemoryQueue) Nack(ctx context.Context, msgID string, errMsg string, retryLeft int) error {
+	return q.nack(msgID, errMsg, retryLeft, 0)
+}
+
+// NackAfter 按调用方指定的延迟重投（见 DelayNacker）。
+func (q *InMemoryQueue) NackAfter(ctx context.Context, msgID string, errMsg string, retryLeft int, delay time.Duration) error {
+	return q.nack(msgID, errMsg, retryLeft, delay)
+}
+
+// nack 是 Nack / NackAfter 的共同实现。delay > 0 表示调用方指定的精确延迟。
+//
+// 刻意的签名：**不接收调用方 ctx**。这是一个真实缺陷的修复——
+// 原实现把延迟重投的发送挂在调用方的 ctx 上，而调度器收尾路径传的是
+// detached(ctx, 10s)（函数返回时立刻 cancel）。重投最小延迟 100ms，
+// 远大于收尾耗时，于是 `select` 稳定走 ctx.Done 分支：
+// **承诺了重试却一条都不重试，而且没有任何日志**。内存模式（无 Redis 的
+// 演示/压测/单测模式）下任务级重试与工作流锁重投因此全部失效。
+// 队列的生命周期只受 q.stop 约束，与任何一次调用的 ctx 无关。
+func (q *InMemoryQueue) nack(msgID string, errMsg string, retryLeft int, delay time.Duration) error {
 	q.mu.Lock()
 	j, ok := q.inflight[msgID]
 	delete(q.inflight, msgID)
@@ -632,18 +763,27 @@ func (q *InMemoryQueue) Nack(ctx context.Context, msgID string, errMsg string, r
 	if retryLeft <= 0 {
 		return fmt.Errorf("message %s dropped to dlq: %s", msgID, errMsg)
 	}
-	j.Attempt++
-	delay := time.Duration(1<<(j.Attempt-1)) * 100 * time.Millisecond
-	if delay > 2*time.Second {
-		delay = 2 * time.Second
+	if delay <= 0 {
+		j.Attempt++
+		delay = time.Duration(1<<(j.Attempt-1)) * 100 * time.Millisecond
+		if delay > 2*time.Second {
+			delay = 2 * time.Second
+		}
 	}
 	time.AfterFunc(delay, func() {
 		select {
 		case q.ch <- j:
-		case <-ctx.Done():
+		case <-q.stop:
 		}
 	})
 	return nil
+}
+
+// Close 停止队列：不再接收延迟重投，已排队的消息仍可被消费方取走（尽力而为）。
+// 不在 Queue 接口里——接口的其它实现没有"关闭"这一动作，
+// 而调度器的优雅关闭路径只依赖 ctx 取消，不依赖这个。
+func (q *InMemoryQueue) Close() {
+	q.stopOnce.Do(func() { close(q.stop) })
 }
 
 func (q *InMemoryQueue) Len(context.Context) (int64, error) {

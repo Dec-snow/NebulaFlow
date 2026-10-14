@@ -161,6 +161,23 @@ func (f *fakeTaskStore) nodeStatus(taskID int64, key string) (model.TaskNodeStat
 	return "", nil
 }
 
+// forceNode 把某个节点强制置为指定状态（恢复/重投场景的测试装置：
+// 直接构造"上一轮执行留下的库状态"）。
+func (f *fakeTaskStore) forceNode(taskID int64, key string, nodeType model.NodeType, status model.TaskNodeStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, n := range f.nodes[taskID] {
+		if n.NodeKey == key {
+			n.Status = status
+			n.NodeType = nodeType
+			return
+		}
+	}
+	f.nodes[taskID] = append(f.nodes[taskID], &model.TaskNode{
+		TaskID: taskID, NodeKey: key, NodeType: nodeType, Status: status,
+	})
+}
+
 // pendingNodes 返回仍处于非终态（pending / running）的节点，用于验证收敛性。
 func (f *fakeTaskStore) pendingNodes(taskID int64) []string {
 	f.mu.Lock()
@@ -275,6 +292,7 @@ type testRig struct {
 	queue     *queue.InMemoryQueue
 	pool      *worker.WorkerPool
 	knowledge *fakeKnowledgeStore
+	metrics   *observability.Metrics
 	cancel    context.CancelFunc
 }
 
@@ -305,7 +323,8 @@ func newTestRig(t *testing.T, wf *model.Workflow, extraTools ...tool.Tool) *test
 		pool.Shutdown(5 * time.Second)
 		cancel()
 	})
-	return &testRig{sched: sched, tasks: ts, hub: hub, queue: q, pool: pool, knowledge: ks, cancel: cancel}
+	return &testRig{sched: sched, tasks: ts, hub: hub, queue: q, pool: pool, knowledge: ks,
+		metrics: metrics, cancel: cancel}
 }
 
 func (r *testRig) run(t *testing.T, taskID int64) error {

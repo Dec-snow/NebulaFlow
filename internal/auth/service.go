@@ -18,7 +18,33 @@ var (
 	ErrInvalidCredentials   = errors.New("invalid username or password")
 	ErrInvalidToken         = errors.New("invalid or expired token")
 	ErrInsufficientPermission = errors.New("insufficient permission")
+
+	// 下面三个是**可展示**的密码策略错误（API 层映射为 400 并把文本回给客户端）。
+	//
+	// 为什么必须自成一类：
+	//   - 掉进 API 层的 default 分支会变成 500 —— 把"用户密码太长"报成"服务端故障"，
+	//     用户以为服务挂了，运维也收不到有用的信息；
+	//   - 被当成凭据错误会变成 401 —— 用户以为密码错了，实际是长度超限，
+	//     怎么改都"错"，永远绕不出去。
+	//
+	// 文本里**绝不能**出现底层库的名字。原实现直接透传 bcrypt 的错误，
+	// 客户端拿到的是 "bcrypt: password length exceeds 72 bytes"：
+	// 既泄露了实现细节（攻击者据此知道我们用什么哈希库、参数上限在哪），
+	// 也对用户毫无指导意义。
+	ErrWeakPassword = errors.New("invalid password")
+	// ErrPasswordTooShort 是"不足 6 个字符"。注意单位是**字符**（rune），
+	// 见 Register 里的说明。
+	ErrPasswordTooShort = errors.New("password must be at least 6 characters")
+	// ErrPasswordTooLong 是"超过 bcrypt 的 72 **字节**上限"。
+	// 单位是字节而不是字符：这个上限来自哈希算法本身，与显示宽度无关。
+	ErrPasswordTooLong = errors.New("password must be at most 72 bytes")
 )
+
+// MaxPasswordBytes 是密码的字节上限，等于 bcrypt 能处理的最大长度。
+//
+// 导出是为了让 API 层的请求校验能与服务层用**同一个**常量：
+// 两处各写一个字面量 72，改一处漏一处时就会出现"校验放行、哈希 500"的缝隙。
+const MaxPasswordBytes = 72
 
 // dummyHash 是一个**固定**的 bcrypt 哈希，用于消除 Login 的时间侧信道。
 //
@@ -85,11 +111,24 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 	// 这类缺陷单看代码很难发现（`len(x) < 6` 看上去完全正常），
 	// 只有拿一个"字符数不足但字节数达标"的输入才能把它逼出来。
 	if utf8.RuneCountInString(password) < 6 {
-		return nil, errors.New("password must be at least 6 characters")
+		return nil, ErrPasswordTooShort
+	}
+	// 上限则必须按**字节数**：bcrypt 只处理前 72 字节，超了直接报错。
+	//
+	// 这两个单位不同不是笔误：下限是产品策略（"6 个字符"对用户友好），
+	// 上限是算法约束（72 字节，与字符宽度无关）。用错单位就会漏判：
+	// 30 个中文字符只有 30 个字符却有 90 字节，按字符数校验会放行，
+	// 然后挂在 bcrypt 上——一个"看起来完全合法"的密码换来一个 500。
+	if len(password) > MaxPasswordBytes {
+		return nil, fmt.Errorf("%w (got %d bytes)", ErrPasswordTooLong, len(password))
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, fmt.Errorf("hash password: %w", err)
+		// 走到这里说明密码本身不合格（长度超限是唯一现实原因）。
+		// 它是**校验错误**而不是服务端故障：绝不能升级成 500，
+		// 否则任何用户输入一个超长密码就能让服务端报"内部错误"。
+		// 同时不透传库内文案——只给出我们自己的说明。
+		return nil, fmt.Errorf("%w: at most %d bytes allowed", ErrWeakPassword, MaxPasswordBytes)
 	}
 
 	// 第一个注册的用户自动获得 admin 角色（引导期便利，后续可由 admin 手动降级）。
@@ -116,6 +155,12 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 }
 
 func (s *Service) Login(ctx context.Context, username, password string) (string, *model.User, error) {
+	// 超过 bcrypt 上限的密码**不可能**匹配任何合法哈希（注册侧已经拒绝了它们），
+	// 直接按校验错误返回：既不用跑一次注定失败的 bcrypt，也不会把库内错误文案漏出去。
+	// 这条检查只依赖输入、不依赖用户是否存在，因此不会引入用户名枚举的侧信道。
+	if len(password) > MaxPasswordBytes {
+		return "", nil, fmt.Errorf("%w (got %d bytes)", ErrPasswordTooLong, len(password))
+	}
 	u, err := s.store.GetUserByUsername(ctx, username)
 	if err != nil {
 		// 只有「用户不存在」是凭据错误。

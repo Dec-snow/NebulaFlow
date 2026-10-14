@@ -222,8 +222,18 @@ EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
 1. **建 API 客户端**：在 `src/lib/` 下加 `api.ts`，封装 fetch + 注入 `Authorization`。
 2. **替换数据源**：把页面里的 `TASKS` / `WORKFLOWS` 等常量换成 `useEffect` + `useState`
    或引入 TanStack Query；类型定义可直接复用 `mock.ts` 里已导出的 interface。
-3. **SSE 实时流**：`TaskDetail` 的事件流当前由 `buildEvents()` 模拟，
-   换成 `new EventSource('/api/tasks/:id/stream')` 并逐条 append 即可，
+3. **SSE 实时流**：`TaskDetail` 的事件流当前由 `buildEvents()` 模拟。
+
+   ⚠️ **不要用 `new EventSource(...)`**：浏览器的 `EventSource` 无法设置请求头，
+   而后端 `/api/tasks/:id/stream` 挂在 `authMiddleware` 之后
+   （`internal/api/server.go` 中 `api.Use(authMiddleware(...))` 在路由注册之前），
+   缺 `Authorization: Bearer` 一律 401。更糟的是 `EventSource` 会每 ~3s 自动重连，
+   单个用户默认限流 120 req/min，开两个详情页就能把该用户所有 API 拖进 429。
+
+   可行做法（后端协议不变）：`fetch(url, { headers: { Authorization: \`Bearer \${token}\` }, signal })`
+   + `response.body.getReader()`，自己按 `\n\n` 切分 SSE 帧、解析 `event:` / `data:` 行；
+   另一种是与后端约定一次性 ticket 走 query 参数，但那需要后端配合。
+
    事件结构已对齐后端（`task_created` / `node_started` / `node_completed` / `token`）。
 4. **登录**：`src/lib/session.ts` 的 `login()` 换成调用 `/api/auth/login` 并存 token。
 

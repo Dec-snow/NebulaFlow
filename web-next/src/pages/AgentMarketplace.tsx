@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Bot, Check, Download, Search, Store } from "lucide-react";
 import {
   Badge,
@@ -41,6 +41,9 @@ function MarketplaceAgentCard({
   installed: boolean;
   onInstall: (id: number, name: string) => void;
 }) {
+  // 后端未配置能力时该字段可能缺失，直接 .slice/.length 会抛 TypeError
+  const capabilities = Array.isArray(agent.capabilities) ? agent.capabilities : [];
+
   return (
     <Card hover className="flex h-full flex-col">
       <div className="mb-3 flex items-start gap-3">
@@ -70,13 +73,13 @@ function MarketplaceAgentCard({
 
       {/* 能力标签 */}
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {agent.capabilities.slice(0, 4).map((cap) => (
+        {capabilities.slice(0, 4).map((cap) => (
           <Badge key={cap} tone="neutral">
             {cap}
           </Badge>
         ))}
-        {agent.capabilities.length > 4 && (
-          <Badge tone="neutral">+{agent.capabilities.length - 4}</Badge>
+        {capabilities.length > 4 && (
+          <Badge tone="neutral">+{capabilities.length - 4}</Badge>
         )}
       </div>
 
@@ -122,37 +125,39 @@ export default function AgentMarketplace() {
     [filter, debouncedQ],
   );
 
-  // 收集所有能力标签
+  // 市场接口的 items / installedNames 可能缺失（空结果时后端可能只回 null）
+  const items = data && Array.isArray(data.items) ? data.items : [];
+
+  // 收集所有能力标签（capabilities 可能缺失/为空，不能直接 .forEach）
   const allCapabilities = useMemo(() => {
-    if (!data) return [] as string[];
+    if (items.length === 0) return [] as string[];
     const set = new Set<string>();
-    data.items.forEach((a) => a.capabilities.forEach((c) => set.add(c)));
+    items.forEach((a) => (Array.isArray(a.capabilities) ? a.capabilities : []).forEach((c) => set.add(c)));
     return Array.from(set);
-  }, [data]);
+  }, [items]);
 
   // 合并初始已安装 + 新安装的
   const installedNames = useMemo(() => {
-    const base = new Set(data?.installedNames ?? []);
+    const base = new Set(Array.isArray(data?.installedNames) ? data.installedNames : []);
     installedSet.forEach((n) => base.add(n));
     return base;
   }, [data, installedSet]);
 
   // 按能力筛选
   const filteredItems = useMemo(() => {
-    if (!data) return [] as Agent[];
-    if (capFilter === "all") return data.items;
-    return data.items.filter((a) => a.capabilities.includes(capFilter));
-  }, [data, capFilter]);
+    if (items.length === 0) return [] as Agent[];
+    if (capFilter === "all") return items;
+    return items.filter((a) => (Array.isArray(a.capabilities) ? a.capabilities : []).includes(capFilter));
+  }, [items, capFilter]);
 
   const counts = useMemo(() => {
-    if (!data) return { all: 0, native: 0, langchain: 0, http: 0 };
     return {
-      all: data.items.length,
-      native: data.items.filter((a) => a.runtimeType === "native").length,
-      langchain: data.items.filter((a) => a.runtimeType === "langchain").length,
-      http: data.items.filter((a) => a.runtimeType === "http").length,
+      all: items.length,
+      native: items.filter((a) => a.runtimeType === "native").length,
+      langchain: items.filter((a) => a.runtimeType === "langchain").length,
+      http: items.filter((a) => a.runtimeType === "http").length,
     };
-  }, [data]);
+  }, [items]);
 
   const handleInstall = async (id: number, name: string) => {
     await api.agents.install(id);
@@ -177,7 +182,7 @@ export default function AgentMarketplace() {
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-fg">Agent 市场</h2>
           <p className="mt-0.5 text-xs text-fg-subtle">
-            共 {data?.items.length ?? 0} 个 Agent · 一键安装到你的工作区
+            共 {items.length} 个 Agent · 一键安装到你的工作区
           </p>
         </div>
       </div>

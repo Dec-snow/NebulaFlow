@@ -13,11 +13,21 @@ import (
 
 type TaskRepo struct{ db *database.DB }
 
+// CreateTask 写入任务。
+//
+// priority 必须显式写入并从 RETURNING 回填：列在 006_priority_retry.sql 里真实存在
+// （VARCHAR(16) NOT NULL DEFAULT 'normal'），内存实现（memory_tasks.go）也一直保留它，
+// 但原实现的 INSERT 整条没提 priority —— PG 模式下调用方给的 high/low 被静默丢弃，
+// 全部落成默认 'normal'；而"内存模式对、PG 模式错"的单测是发现不了的。
+//
+// 取值用 model.NormalizePriority 兜底：空值与非法值统一落成 'normal'，
+// 避免把脏字符串写进库里（它同时会破坏调度侧按优先级取任务的语义）。
 func (r *TaskRepo) CreateTask(ctx context.Context, t *model.Task) error {
 	err := r.db.Pool.QueryRow(ctx,
-		`INSERT INTO tasks (workflow_id, user_id, status, input) VALUES ($1, $2, $3, $4)
-		 RETURNING id, created_at`, t.WorkflowID, t.UserID, t.Status, t.Input,
-	).Scan(&t.ID, &t.CreatedAt)
+		`INSERT INTO tasks (workflow_id, user_id, status, input, priority) VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id, created_at, priority`,
+		t.WorkflowID, t.UserID, t.Status, t.Input, model.NormalizePriority(t.Priority),
+	).Scan(&t.ID, &t.CreatedAt, &t.Priority)
 	if err != nil {
 		return err
 	}
@@ -27,9 +37,9 @@ func (r *TaskRepo) CreateTask(ctx context.Context, t *model.Task) error {
 func (r *TaskRepo) GetTask(ctx context.Context, id, userID int64) (*model.Task, error) {
 	t := &model.Task{}
 	err := r.db.Pool.QueryRow(ctx,
-		`SELECT id, workflow_id, user_id, status, input, output, error, started_at, finished_at, created_at
+		`SELECT id, workflow_id, user_id, status, priority, input, output, error, started_at, finished_at, created_at
 		 FROM tasks WHERE id=$1 AND user_id=$2`, id, userID,
-	).Scan(&t.ID, &t.WorkflowID, &t.UserID, &t.Status, &t.Input, &t.Output, &t.Error,
+	).Scan(&t.ID, &t.WorkflowID, &t.UserID, &t.Status, &t.Priority, &t.Input, &t.Output, &t.Error,
 		&t.StartedAt, &t.FinishedAt, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTaskNotFound
@@ -49,9 +59,9 @@ func (r *TaskRepo) GetTask(ctx context.Context, id, userID int64) (*model.Task, 
 func (r *TaskRepo) GetTaskByID(ctx context.Context, id int64) (*model.Task, error) {
 	t := &model.Task{}
 	err := r.db.Pool.QueryRow(ctx,
-		`SELECT id, workflow_id, user_id, status, input, output, error, started_at, finished_at, created_at
+		`SELECT id, workflow_id, user_id, status, priority, input, output, error, started_at, finished_at, created_at
 		 FROM tasks WHERE id=$1`, id,
-	).Scan(&t.ID, &t.WorkflowID, &t.UserID, &t.Status, &t.Input, &t.Output, &t.Error,
+	).Scan(&t.ID, &t.WorkflowID, &t.UserID, &t.Status, &t.Priority, &t.Input, &t.Output, &t.Error,
 		&t.StartedAt, &t.FinishedAt, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrTaskNotFound
@@ -67,7 +77,7 @@ func (r *TaskRepo) ListTasks(ctx context.Context, userID int64, limit, offset in
 		limit = 20
 	}
 	rows, err := r.db.Pool.Query(ctx,
-		`SELECT id, workflow_id, user_id, status, input, output, error, started_at, finished_at, created_at
+		`SELECT id, workflow_id, user_id, status, priority, input, output, error, started_at, finished_at, created_at
 		 FROM tasks WHERE user_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3`,
 		userID, limit, offset)
 	if err != nil {
@@ -77,7 +87,7 @@ func (r *TaskRepo) ListTasks(ctx context.Context, userID int64, limit, offset in
 	var out []model.Task
 	for rows.Next() {
 		var t model.Task
-		if err := rows.Scan(&t.ID, &t.WorkflowID, &t.UserID, &t.Status, &t.Input, &t.Output, &t.Error,
+		if err := rows.Scan(&t.ID, &t.WorkflowID, &t.UserID, &t.Status, &t.Priority, &t.Input, &t.Output, &t.Error,
 			&t.StartedAt, &t.FinishedAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}

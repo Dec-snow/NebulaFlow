@@ -43,3 +43,6 @@ Thumbs.db
 
 # 基准测试结果
 benchmark/results/
+
+# 个人分享材料（不属于代码库内容）
+/分享文档/

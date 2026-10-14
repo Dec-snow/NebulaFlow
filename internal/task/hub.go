@@ -5,6 +5,7 @@
 package task
 
 import (
+	"container/list"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -79,6 +80,18 @@ func NewEvent(t EventType, taskID int64) Event {
 // replayCap 是每个任务保留的最近事件数，供新订阅者（或断线重连）回放。
 const replayCap = 64
 
+// MaxReplayTasks 是回放缓冲覆盖的**任务数**上界（超过则淘汰最久未发布的那个任务）。
+//
+// 为什么必须要有这个上界：replay 是按 taskID 累积的，每个任务留下约 244B 的事件切片。
+// 原实现只在"最后一个订阅者退订"时删除条目，而**绝大多数任务从来没有订阅者**
+// （不点开详情页就不会连 SSE），于是这些条目永远不会被删掉。
+// 实测 20 万个任务累积 46MB，且随历史任务数**线性增长**——一个 7×24 跑着的服务
+// 迟早会被它吃光内存，而症状（OOM）看起来和任务执行毫无关系。
+//
+// 1024 个任务 ≈ 250KB，足够覆盖"用户刚断开、马上重连"这个真实场景；
+// 超出后淘汰的是最久没有新事件的任务，正在进行中的任务会因为持续 Publish 而保持新鲜。
+const MaxReplayTasks = 1024
+
 // subInfo 记录单个订阅的元信息，用于退订时正确扣减用户计数。
 type subInfo struct {
 	ch     chan Event
@@ -105,6 +118,16 @@ type Hub struct {
 	dropped  atomic.Int64
 	subCount atomic.Int64
 
+	// replayLRU 按"最近发布"排序回放条目：Front 是最久没更新的任务。
+	// replayIdx 是 taskID → 链表节点的反向索引，用于 O(1) 精确删除。
+	//
+	// 为什么不用一个 []int64 记录顺序：那需要额外的精确删除逻辑，
+	// 而"只删切片头部、跳过已失效 id"的做法本身又会让那个切片无界增长——
+	// 也就是把内存泄漏从一个 map 挪到另一个 map 里，问题并没有解决。
+	replayLRU *list.List
+	replayIdx map[int64]*list.Element
+	maxReplay int
+
 	// userSubs 记录每用户的连接数，用于单用户限流。
 	userSubs map[int64]int
 	// maxPerUser / maxTotal 是连接数上限，可由测试调整。
@@ -116,10 +139,30 @@ func NewHub() *Hub {
 	return &Hub{
 		subs:       make(map[int64]map[chan Event]subInfo),
 		replay:     make(map[int64][]Event),
+		replayLRU:  list.New(),
+		replayIdx:  make(map[int64]*list.Element),
+		maxReplay:  MaxReplayTasks,
 		userSubs:   make(map[int64]int),
 		maxPerUser: MaxSubscriptionsPerUser,
 		maxTotal:   MaxTotalSubscriptions,
 	}
+}
+
+// SetReplayLimit 调整回放缓冲覆盖的任务数上界（测试用；必须在使用前调用）。
+func (h *Hub) SetReplayLimit(n int) {
+	if n <= 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.maxReplay = n
+}
+
+// ReplayTaskCount 返回当前保留了回放的任务数（监控"长期运行内存是否线性增长"用）。
+func (h *Hub) ReplayTaskCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.replay)
 }
 
 // SetLimits 允许测试或配置调整连接数上限（必须在使用前调用）。
@@ -189,7 +232,7 @@ func (h *Hub) Subscribe(taskID int64, userID int64) (<-chan Event, func(), error
 				}
 				if len(set) == 0 {
 					delete(h.subs, taskID)
-					delete(h.replay, taskID)
+					h.dropReplayLocked(taskID)
 				}
 			}
 			h.mu.Unlock()
@@ -215,16 +258,57 @@ func (h *Hub) Publish(ev Event) {
 
 // appendReplay 维护最近事件环形缓冲，调用方必须持有 mu。
 func (h *Hub) appendReplay(ev Event) {
-	buf := h.replay[ev.TaskID]
 	// token 事件量大且可从节点输出还原，不入回放缓冲
 	if ev.Type == EventToken {
 		return
 	}
+	if _, seen := h.replayIdx[ev.TaskID]; !seen {
+		// 新任务：先腾出位置（淘汰最久没更新的那个任务），再登记。
+		h.evictReplayLocked()
+		h.replayIdx[ev.TaskID] = h.replayLRU.PushBack(ev.TaskID)
+	} else {
+		// 已有条目：把它移到链表尾部，保持"最久未发布在最前"的顺序。
+		h.replayLRU.MoveToBack(h.replayIdx[ev.TaskID])
+	}
+	buf := h.replay[ev.TaskID]
 	buf = append(buf, ev)
 	if len(buf) > replayCap {
-		buf = buf[len(buf)-replayCap:]
+		// 只保留最近 replayCap 条：切片尾部就是最新的。
+		//
+		// 这里刻意用"同一底层数组内往前挪"（overlap 的 memmove 由 copy 保证正确），
+		// 而不是 `append(buf[:0], ...)` 之外的两种写法：
+		//   - `buf = buf[len(buf)-replayCap:]` 会让底层数组的起始偏移一直往前爬，
+		//     被丢掉的事件占的内存要等下一次扩容才还回去；
+		//   - `make + copy` 每次发布都新分配一个 64 元素的切片
+		//     （≈16KB/事件），在 SSE 这种"每次节点状态变化都发一条"的路径上
+		//     是实打实的吞吐回归。
+		buf = append(buf[:0], buf[len(buf)-replayCap:]...)
 	}
 	h.replay[ev.TaskID] = buf
+}
+
+// evictReplayLocked 在回放条目数达到上界时淘汰最久未发布的任务。
+// 调用方必须持有 mu。
+func (h *Hub) evictReplayLocked() {
+	if h.maxReplay <= 0 {
+		return
+	}
+	for len(h.replay) >= h.maxReplay && h.replayLRU.Len() > 0 {
+		oldest := h.replayLRU.Front()
+		taskID, _ := oldest.Value.(int64)
+		h.replayLRU.Remove(oldest)
+		delete(h.replayIdx, taskID)
+		delete(h.replay, taskID)
+	}
+}
+
+// dropReplayLocked 删除某个任务的回放条目并同步链表索引。调用方必须持有 mu。
+func (h *Hub) dropReplayLocked(taskID int64) {
+	delete(h.replay, taskID)
+	if el, ok := h.replayIdx[taskID]; ok {
+		h.replayLRU.Remove(el)
+		delete(h.replayIdx, taskID)
+	}
 }
 
 // SubscriberCount 返回某任务的实时订阅数（用于监控）。
@@ -246,17 +330,23 @@ type HubStats struct {
 	Subscribers int64 // 总订阅数
 	Dropped     int64 // 被丢弃的事件总数
 	Users       int   // 有活跃连接的用户数
+	// ReplayTasks 是当前保留回放的任务数（上界 MaxReplayTasks）。
+	// 这个数字应当**稳定在上界附近**而不是随历史任务数一直涨：
+	// 它一直涨就说明回放条目没有被回收，内存会线性增长。
+	ReplayTasks int
 }
 
-// Stats 返回 Hub 的运行时指标：订阅者总数、被丢弃的事件总数、活跃用户数。
+// Stats 返回 Hub 的运行时指标：订阅者总数、被丢弃的事件总数、活跃用户数、回放任务数。
 // 丢弃数上升说明某个 SSE 客户端消费过慢，是排查"前端卡住"的第一手线索。
 func (h *Hub) Stats() HubStats {
 	h.mu.Lock()
 	users := len(h.userSubs)
+	replay := len(h.replay)
 	h.mu.Unlock()
 	return HubStats{
 		Subscribers: h.subCount.Load(),
 		Dropped:     h.dropped.Load(),
 		Users:       users,
+		ReplayTasks: replay,
 	}
 }

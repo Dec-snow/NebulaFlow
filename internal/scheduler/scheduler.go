@@ -66,6 +66,62 @@ type KnowledgeStore interface {
 	SearchChunks(ctx context.Context, kbID int64, queryVec []float64, k int) ([]model.DocumentChunk, error)
 }
 
+// LockScope 决定分布式锁的粒度。
+//
+// 为什么需要这个旋钮——压测实测出来的一个 55 倍回退：
+// 锁最初按**工作流**加，语义是"同一个工作流的任务不许并发"。但 executeTask 的
+// 可变状态（done / inDegree / results / submitted）全是函数局部的，task_nodes 也按
+// (task_id, node_key) 唯一——**同一个工作流的两个不同任务本来就不会互相干扰**。
+// 按工作流加锁等于把"防止同一任务被两个实例重复执行"退化成了"整条工作流串行"。
+//
+// 受控对照（同一二进制、只改锁，loadgen 1200 任务 / 20 worker / 单工作流）：
+//
+//	按工作流加锁：任务吞吐  8.9 tasks/s，p50 端到端 97.9s，227 个任务未完成
+//	不加锁（对照）：任务吞吐 493.5 tasks/s，p50 端到端  1.31s，全 100% 落地
+//
+// 所以默认粒度是 **task**：既保住"同一个任务不会被两个实例同时执行"这个真实需求
+// （崩溃恢复的 XAUTOCLAIM 会重新投递还活着的长任务），又不把独立任务串行化。
+// 确实需要工作流级串行的场景（例如工作流里有必须串行化的外部副作用），
+// 用 WORKFLOW_LOCK_SCOPE=workflow 显式打开。
+type LockScope int
+
+const (
+	// LockScopeTask 只阻止同一个任务被并发执行（默认）。
+	LockScopeTask LockScope = iota
+	// LockScopeWorkflow 阻止同一个工作流的任务并发执行（串行化，吞吐受限）。
+	LockScopeWorkflow
+	// LockScopeOff 完全不加锁（单实例 / 测试 / 排障）。
+	LockScopeOff
+)
+
+func (s LockScope) String() string {
+	switch s {
+	case LockScopeWorkflow:
+		return "workflow"
+	case LockScopeOff:
+		return "off"
+	default:
+		return "task"
+	}
+}
+
+// ParseLockScope 解析配置字符串；无法识别时返回默认值 task 与 false。
+//
+// 刻意不返回错误：配置拼错时的正确行为是"退回安全默认值 + 告警"，
+// 而不是让服务起不来（与 config.Validate 的 fail-safe 原则一致）。
+func ParseLockScope(s string) (LockScope, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "task":
+		return LockScopeTask, true
+	case "workflow", "wf":
+		return LockScopeWorkflow, true
+	case "off", "none", "disabled":
+		return LockScopeOff, true
+	default:
+		return LockScopeTask, false
+	}
+}
+
 type Scheduler struct {
 	tasks     TaskStore
 	workflows WorkflowStore
@@ -87,9 +143,11 @@ type Scheduler struct {
 	// tracing 提供进程内 span 存储（用于 task → trace 反查与归属校验）。
 	// 为 nil 时一切退化为空操作；span 本身的创建走包级函数，不依赖这个字段。
 	tracing *tracing.Provider
-	// wfLock 防止同一工作流在多个实例上并发执行。
+	// wfLock 防止同一任务/工作流在多个实例上并发执行。
 	// 为 nil 时不加锁（单实例内存模式下的兼容行为）。
 	wfLock WorkflowLock
+	// lockScope 决定锁的粒度（默认 task，见 LockScope 的说明）。
+	lockScope LockScope
 
 	taskTimeout     time.Duration
 	defaultMaxRetry int
@@ -263,9 +321,41 @@ func (s *Scheduler) SetTracing(p *tracing.Provider) { s.tracing = p }
 // SetWorkflowLock 注入分布式锁（main 装配时调用）。
 //
 // 为 nil 时不加锁——内存模式或 Redis 不可用时的兼容行为。
-// 生产模式下有 Redis 就应该注入，否则同一工作流可在多实例上同时执行
-// （产生脏 task_nodes、重复 LLM 调用、输出错位）。
+// 生产模式下有 Redis 就应该注入，否则同一个任务可能被两个实例同时执行
+// （XAUTOCLAIM 会把"跑了很久但还活着"的任务当成遗留消息重新投递）。
 func (s *Scheduler) SetWorkflowLock(l WorkflowLock) { s.wfLock = l }
+
+// SetLockScope 设置锁粒度（见 LockScope）。必须在 Run 之前调用。
+func (s *Scheduler) SetLockScope(scope LockScope) { s.lockScope = scope }
+
+// lockKeyFor 返回一次任务执行应当持有的锁键。
+//   - task 粒度：任务 id（默认真实需求：同一任务不被两个实例重复执行）
+//   - workflow 粒度：工作流 id（显式打开的工作流级串行化）
+func (s *Scheduler) lockKeyFor(taskID, workflowID int64) int64 {
+	if s.lockScope == LockScopeWorkflow {
+		return workflowID
+	}
+	return taskID
+}
+
+// lockRetryDelay 是"锁被别人占着"时的固定重投延迟。
+//
+// 为什么要显式指定而不是走队列的指数退避：等锁不是一次失败的执行尝试，
+// 退避会随重投次数指数放大（Redis 后端封顶 5 分钟），表现为"提交后几分钟才出结果"。
+// 固定 500ms 的语义是"过一会儿再来问一次"，与锁的持有时间（一次任务执行）同量级。
+const lockRetryDelay = 500 * time.Millisecond
+
+// requeueForLock 把因锁竞争而没能开始的任务放回队列。
+//
+// 优先用队列的精确延迟能力（DelayNacker）；队列实现不了就退回 Nack
+// （此时延迟由队列自己的退避策略决定——不理想，但语义正确）。
+func (s *Scheduler) requeueForLock(ctx context.Context, msgID string, lockKey int64) error {
+	errMsg := fmt.Sprintf("lock %d busy, retry later", lockKey)
+	if dn, ok := s.queue.(queue.DelayNacker); ok {
+		return dn.NackAfter(ctx, msgID, errMsg, 1, lockRetryDelay)
+	}
+	return s.queue.Nack(ctx, msgID, errMsg, 1)
+}
 
 // SetAgentRouter 注入动态路由策略（main 装配时调用）。
 //
@@ -378,6 +468,19 @@ func (s *Scheduler) consumeLoop(ctx context.Context, workerID string) {
 		if err := s.executeTask(taskCtx, job, msgID); err != nil {
 			s.logger.Error("task execution failed",
 				"task_id", job.TaskID, "consumer", workerID, "error", err)
+			// 引擎级错误（DB 抖动、连接池耗尽、语句超时）必须把消息放回队列。
+			//
+			// 原实现只打一行日志就 continue，注释说"交给 PEL 重投"——但运行期
+			// 没有任何地方会重投 PEL：XREADGROUP ">" 只投递从未投递过的消息，
+			// 唯一的 XAUTOCLAIM 认领发生在 Run 开头且每个进程只跑一次。
+			// 后果是双重的：这条任务在本进程生命周期内永远不会再执行，
+			// 而且它长期 pending 会把 TrimConsumed 的安全位点钉死
+			// （安全位点取 XPENDING.Lower），队列再也回收不掉已确认前缀，
+			// XLEN 单调逼近 MAXLEN → 开始裁掉未投递的消息 → 静默丢任务。
+			if nerr := s.requeueAfterEngineError(taskCtx, job, msgID, err); nerr != nil {
+				s.logger.Error("requeue after engine error failed",
+					"task_id", job.TaskID, "msg_id", msgID, "error", nerr)
+			}
 		}
 	}
 }
@@ -604,20 +707,34 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 		return nil
 	}
 
-	// 分布式锁：防止同一工作流在多个实例上并发执行。
-	// 获取失败时 Nack 重投（不是 DLQ——这不是业务失败，只是"还没轮到我"），
+	// 分布式锁：防止同一任务（默认）或同一工作流（显式配置）在多个实例上并发执行。
+	// 获取失败时重投（不是 DLQ——这不是业务失败，只是"还没轮到我"），
 	// 让持锁实例完成后再消费这条消息。
 	//
-	// 为什么放在 DAG 校验之后、建节点之前：锁的粒度是工作流不是任务，
-	// 放在取工作流之后就能用 wf.ID；放在建节点之前则保证 task_nodes 不会重复。
-	if s.wfLock != nil {
-		release, lockErr := s.wfLock.Acquire(ctx, wf.ID)
+	// 为什么放在 DAG 校验之后、建节点之前：锁的粒度与 task/workflow 有关，
+	// 放在取工作流之后就能同时拿到 t.ID 与 wf.ID；放在建节点之前则保证
+	// task_nodes 不会重复。
+	if s.wfLock != nil && s.lockScope != LockScopeOff {
+		lockKey := s.lockKeyFor(t.ID, wf.ID)
+		release, lockErr := s.wfLock.Acquire(ctx, lockKey)
 		if lockErr != nil {
-			s.logger.Debug("workflow locked by another instance, requeueing",
-				"task_id", t.ID, "workflow_id", wf.ID, "error", lockErr)
-			// 短延迟重投：持锁实例通常很快完成（taskTimeout 5min，锁 TTL 10min），
-			// 3 秒后重试是"等一下再来看看"的合理间隔。
-			_ = s.queue.Nack(ctx, msgID, "workflow locked", 3)
+			// Info 而不是 Debug：锁竞争在"同一工作流批量提交"时是常态，
+			// 用 Debug 会让"任务为什么迟迟不跑"在生产日志里完全查不到
+			// （实测默认日志级别下这条线索一条都看不到）。
+			s.logger.Info("execution lock busy, requeueing task",
+				"task_id", t.ID, "workflow_id", wf.ID,
+				"lock_key", lockKey, "lock_scope", s.lockScope.String(),
+				"retry_in", lockRetryDelay, "error", lockErr)
+			if err := s.requeueForLock(ctx, msgID, lockKey); err != nil {
+				s.logger.Error("requeue after lock contention failed",
+					"task_id", t.ID, "lock_key", lockKey, "error", err)
+			}
+			// 归还 running 计数：原实现直接 finished = true 返回，从不调用
+			// ObserveTaskDone，于是每一次锁竞争都让 running gauge 永久 +1，
+			// Dashboard 的"运行中任务"只增不减。
+			if counted && s.metrics != nil {
+				s.metrics.ObserveTaskDropped()
+			}
 			finished = true
 			return nil
 		}
@@ -787,29 +904,45 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 	// ---- Checkpoint 恢复：从数据库读取已有节点状态，跳过已完成的 ----
 	//
 	// 审批通过 / 失败重试后，任务会重新入队。此时 task_nodes 里
-	// 已经有了前一次执行留下的状态（succeeded / failed / waiting）。
-	// 我们把已经终态的节点直接标记为 submitted，让调度器从"断点"继续，
+	// 已经有了前一次执行留下的状态（succeeded / failed / skipped / waiting）。
+	// 我们把已经终态的节点登记进调度状态，让调度器从"断点"继续，
 	// 而不是从头再跑一遍（浪费 token + 可能产生副作用）。
+	//
+	// 每个终态节点都必须走 markTerminal：它是**唯一**的记账入口
+	// （submitted 去重 + remaining 递减 + 后继入度递减），原实现是三条分支各写各的：
+	//   - succeeded 分支递减后继入度；
+	//   - failed 分支靠 skipDownstream 递减 remaining，之后又自己 remaining--，
+	//     同一批节点被记两次账 → remaining 在进循环前就归零 → 可运行分支永远调不到；
+	//   - skipped 分支什么都不做 → 后继入度永不归零 → 白等到任务超时（默认 300s）。
+	markTerminal := func(key string, decSuccessors bool) {
+		if submitted[key] {
+			return
+		}
+		submitted[key] = true
+		remaining--
+		if !decSuccessors {
+			return
+		}
+		for _, target := range dag.Edges[key] {
+			inDegree[target]--
+		}
+	}
 	if existingNodes, err := s.listTaskNodes(runCtx, t.ID); err == nil {
 		for _, tn := range existingNodes {
-			if tn.Status == model.NodeSucceeded {
-				submitted[tn.NodeKey] = true
+			switch tn.Status {
+			case model.NodeSucceeded:
+				markTerminal(tn.NodeKey, true)
 				results[tn.NodeKey] = tn.Output
-				remaining--
-				// 后继入度减 1（模拟节点完成）
-				for _, target := range dag.Edges[tn.NodeKey] {
-					inDegree[target]--
-				}
-			} else if tn.Status == model.NodeFailed {
-				submitted[tn.NodeKey] = true
-				remaining--
+			case model.NodeFailed:
+				markTerminal(tn.NodeKey, false)
 				if firstErr == nil {
 					firstErr = fmt.Errorf("node %s failed (resumed)", tn.NodeKey)
 				}
 				skipDownstream(tn.NodeKey, "上游节点 "+tn.NodeKey+" 执行失败")
-			} else if tn.Status == model.NodeSkipped {
-				submitted[tn.NodeKey] = true
-				remaining--
+			case model.NodeSkipped:
+				// 上游失败导致的跳过：后继同样不该再跑，递归跳过（否则入度永不归零）。
+				markTerminal(tn.NodeKey, false)
+				skipDownstream(tn.NodeKey, "上游节点 "+tn.NodeKey+" 已跳过")
 			}
 		}
 	}
@@ -822,45 +955,60 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 		select {
 		case o := <-done:
 			if o.err != nil {
-				// ---- 节点级重试 ----
-				// 审批等待不是错误，不重试
-				if !errors.Is(o.err, errApprovalWaiting) {
-					policy := getRetryPolicy(o.key)
-					retries := retryCount[o.key]
-					if policy.ShouldRetry(retries) {
-						retryCount[o.key] = retries + 1
-						delay := policy.Delay(retries)
-						s.logNode(worker.NodeJob{TaskID: t.ID, NodeKey: o.key, NodeType: dag.Nodes[o.key].Type},
-							"warn", fmt.Sprintf("node failed, will retry %d/%d after %v: %v",
-								retries+1, policy.MaxRetry, delay, o.err))
-
-						// 延迟重试：用 time.AfterFunc 替代 go+Sleep，
-						// 避免大面积故障时 goroutine 膨胀；任务结束时统一 Stop。
-						// 不减少 remaining（节点还在执行中）
-						// submitted[key] 已经是 true 了，保持不变
-						timer := time.AfterFunc(delay, func() {
-							// 执行前先从 map 中移除自己
-							retryMu.Lock()
-							delete(retryTimers, o.key)
-							retryMu.Unlock()
-
-							// 如果任务上下文已取消，不再重试
-							if runCtx.Err() != nil {
-								return
-							}
-							// 更新数据库里的重试计数
-							s.updateNodeRetryCount(runCtx, t.ID, o.key, retries+1)
-							submitNode(o.key)
-						})
-						retryMu.Lock()
-						// 防御：如果已有旧 timer（理论上不会，因为同一节点不会并发重试），先停掉
-						if old, ok := retryTimers[o.key]; ok {
-							old.Stop()
-						}
-						retryTimers[o.key] = timer
-						retryMu.Unlock()
-						continue // 不减少 remaining，不处理失败
+				// ---- 审批挂起：暂停，不是失败 ----
+				//
+				// 原实现把它交给下面的"失败处理"，于是审批节点的**全部下游**被落库为
+				// skipped。审批通过后任务重新入队，恢复逻辑把 skipped 当终态 →
+				// remaining 立刻归零 → 主循环一次都没进 → 任务报"成功"，
+				// 而真正该跑的下游一个都没跑（Human-in-the-loop 的语义被反转，
+				// 有副作用的后续步骤被静默跳过）。
+				//
+				// 正确语义：只把审批节点自己从"待完成"里摘掉，退出调度循环，
+				// 下游保持 pending 等审批结果——审批通过后它们会被正常调度。
+				if errors.Is(o.err, errApprovalWaiting) {
+					if firstErr == nil {
+						firstErr = o.err
 					}
+					remaining = 0
+					continue
+				}
+
+				// ---- 节点级重试 ----
+				policy := getRetryPolicy(o.key)
+				retries := retryCount[o.key]
+				if policy.ShouldRetry(retries) {
+					retryCount[o.key] = retries + 1
+					delay := policy.Delay(retries)
+					s.logNode(worker.NodeJob{TaskID: t.ID, NodeKey: o.key, NodeType: dag.Nodes[o.key].Type},
+						"warn", fmt.Sprintf("node failed, will retry %d/%d after %v: %v",
+							retries+1, policy.MaxRetry, delay, o.err))
+
+					// 延迟重试：用 time.AfterFunc 替代 go+Sleep，
+					// 避免大面积故障时 goroutine 膨胀；任务结束时统一 Stop。
+					// 不减少 remaining（节点还在执行中）
+					// submitted[key] 已经是 true 了，保持不变
+					timer := time.AfterFunc(delay, func() {
+						// 执行前先从 map 中移除自己
+						retryMu.Lock()
+						delete(retryTimers, o.key)
+						retryMu.Unlock()
+
+						// 如果任务上下文已取消，不再重试
+						if runCtx.Err() != nil {
+							return
+						}
+						// 更新数据库里的重试计数
+						s.updateNodeRetryCount(runCtx, t.ID, o.key, retries+1)
+						submitNode(o.key)
+					})
+					retryMu.Lock()
+					// 防御：如果已有旧 timer（理论上不会，因为同一节点不会并发重试），先停掉
+					if old, ok := retryTimers[o.key]; ok {
+						old.Stop()
+					}
+					retryTimers[o.key] = timer
+					retryMu.Unlock()
+					continue // 不减少 remaining，不处理失败
 				}
 
 				// 重试用完或不需要重试 → 正常失败处理
@@ -940,6 +1088,34 @@ func (s *Scheduler) executeTask(ctx context.Context, job queue.Job, msgID string
 	s.finish(finalCtx, t, model.TaskSucceeded, final, "", msgID, start, &finished, false)
 	s.logger.Info("task finished", "task_id", t.ID, "status", "succeeded",
 		"duration_ms", time.Since(start).Milliseconds())
+	return nil
+}
+
+// requeueAfterEngineError 把"引擎自身出错"的消息延迟重投，而不是留在 PEL 里等一个
+// 永远不会到来的认领。重试预算用引擎级专用值：**至少 1 次**，因为这类错误
+// （DB 抖动）本来就是瞬时的，直接进 DLQ 会把一次连接抖动升级成任务失败。
+func (s *Scheduler) requeueAfterEngineError(ctx context.Context, job queue.Job, msgID string, cause error) error {
+	if msgID == "" {
+		return nil // 内存队列以外的实现可能没有消息 id；无从重投
+	}
+	retryLeft := s.defaultMaxRetry
+	if retryLeft < 1 {
+		retryLeft = 1
+	}
+	// 用脱离取消的短超时上下文重投：任务可能正是因为 ctx 被取消才走到这里。
+	// 重投不是任务收尾，但它同样不该因为"父 ctx 已取消"而失败。
+	nackCtx, cancel := detached(ctx, 5*time.Second)
+	defer cancel()
+
+	errMsg := fmt.Sprintf("engine error: %v", cause)
+	if err := s.queue.Nack(nackCtx, msgID, errMsg, retryLeft); err != nil {
+		return err
+	}
+	// 注意：这里刻意不调用 ObserveTaskDone。executeTask 在异常返回时没有归还
+	// running 计数，由它自己的兜底 defer 负责（那条路径会打
+	// "task exited without final status, metrics reconciled"）。
+	s.logger.Warn("task message requeued after engine error",
+		"task_id", job.TaskID, "msg_id", msgID, "retry_left", retryLeft, "error", cause)
 	return nil
 }
 

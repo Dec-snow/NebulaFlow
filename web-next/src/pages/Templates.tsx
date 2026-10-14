@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Layers, Search, Sparkles, Users } from "lucide-react";
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/api";
 import { useDebounce, useFetch } from "@/hooks";
-import { cn } from "@/lib/utils";
+import { cn, numberOrNull } from "@/lib/utils";
 import type { WorkflowTemplate } from "@/types";
 
 const CATEGORY_TONE: Record<string, string> = {
@@ -34,6 +34,10 @@ function TemplateCard({
   onUse: (id: number, name: string) => void;
 }) {
   const toneClass = CATEGORY_TONE[template.category] ?? "bg-brand-soft text-brand";
+  // 列表接口不下发统计字段（后端 model.Workflow 没有 node_count / used_count），
+  // 缺失时隐藏而不是渲染 "undefined 节点" 或对 undefined 调 .toLocaleString()。
+  const nodeCount = numberOrNull(template.nodes);
+  const usedCount = numberOrNull(template.usedCount);
 
   return (
     <Card hover className="flex h-full flex-col">
@@ -56,15 +60,19 @@ function TemplateCard({
 
       {/* 分类标签 + 节点数 + 使用次数 */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Badge tone="neutral">{template.category}</Badge>
-        <span className="flex items-center gap-1 text-2xs text-fg-subtle">
-          <Layers size={11} />
-          <span className="tnum">{template.nodes} 节点</span>
-        </span>
-        <span className="flex items-center gap-1 text-2xs text-fg-subtle">
-          <Users size={11} />
-          <span className="tnum">{template.usedCount.toLocaleString()} 次使用</span>
-        </span>
+        <Badge tone="neutral">{template.category || "未分类"}</Badge>
+        {nodeCount !== null && (
+          <span className="flex items-center gap-1 text-2xs text-fg-subtle">
+            <Layers size={11} />
+            <span className="tnum">{nodeCount} 节点</span>
+          </span>
+        )}
+        {usedCount !== null && (
+          <span className="flex items-center gap-1 text-2xs text-fg-subtle">
+            <Users size={11} />
+            <span className="tnum">{usedCount.toLocaleString()} 次使用</span>
+          </span>
+        )}
       </div>
 
       <div className="divider my-1" />
@@ -102,27 +110,29 @@ export default function Templates() {
 
   const { data: categories } = useFetch(() => api.templates.categories(), []);
 
+  // 分类统计接口可能不下发数组，直接 .forEach 会抛 TypeError
+  const categoryList = Array.isArray(categories) ? categories : [];
+
   const counts = useMemo(() => {
-    if (!categories) return { all: 0 };
     const map: Record<string, number> = {};
-    categories.forEach((c) => {
+    categoryList.forEach((c) => {
+      const count = numberOrNull(c.count) ?? 0;
       if (c.name === "全部") {
-        map.all = c.count;
+        map.all = count;
       } else {
-        map[c.name] = c.count;
+        map[c.name] = count;
       }
     });
     return map;
-  }, [categories]);
+  }, [categoryList]);
 
   const segmentedOptions = useMemo(() => {
-    if (!categories) return [];
-    return categories.map((c) => ({
+    return categoryList.map((c) => ({
       value: c.name === "全部" ? "all" : c.name,
       label: c.name,
-      count: c.count,
+      count: numberOrNull(c.count) ?? 0,
     }));
-  }, [categories]);
+  }, [categoryList]);
 
   const handleUse = async (id: number, name: string) => {
     const res = await api.templates.use(id);
@@ -141,7 +151,7 @@ export default function Templates() {
     return <ErrorState title="加载模板市场失败" description={error.message} onRetry={refresh} />;
   }
 
-  const list = data?.items ?? [];
+  const list = Array.isArray(data?.items) ? data.items : [];
 
   return (
     <div className="space-y-6">

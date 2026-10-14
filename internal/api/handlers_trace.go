@@ -37,7 +37,7 @@ func (h *traceHandler) store() *tracing.SpanStore {
 func requireUser(c *gin.Context) (*ctxUser, bool) {
 	u := getUser(c)
 	if u == nil {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+		abortJSON(c, http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 		return nil, false
 	}
 	return u, true
@@ -50,7 +50,7 @@ func requireUser(c *gin.Context) (*ctxUser, bool) {
 func (h *traceHandler) byTask(c *gin.Context) {
 	store := h.store()
 	if store == nil {
-		c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": "tracing is not enabled"})
+		abortJSON(c, http.StatusNotImplemented, gin.H{"error": "tracing is not enabled"})
 		return
 	}
 	u, ok := requireUser(c)
@@ -65,7 +65,7 @@ func (h *traceHandler) byTask(c *gin.Context) {
 	traceID, ok := store.TraceForTask(id)
 	if !ok {
 		// 任务还没被 worker 取走时确实没有 trace，这是正常状态而不是错误。
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
+		abortJSON(c, http.StatusNotFound, gin.H{
 			"error": "no trace recorded for this task yet (it may still be queued)",
 		})
 		return
@@ -77,7 +77,7 @@ func (h *traceHandler) byTask(c *gin.Context) {
 func (h *traceHandler) byID(c *gin.Context) {
 	store := h.store()
 	if store == nil {
-		c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": "tracing is not enabled"})
+		abortJSON(c, http.StatusNotImplemented, gin.H{"error": "tracing is not enabled"})
 		return
 	}
 	u, ok := requireUser(c)
@@ -91,7 +91,7 @@ func (h *traceHandler) byID(c *gin.Context) {
 func (h *traceHandler) list(c *gin.Context) {
 	store := h.store()
 	if store == nil {
-		c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": "tracing is not enabled"})
+		abortJSON(c, http.StatusNotImplemented, gin.H{"error": "tracing is not enabled"})
 		return
 	}
 	u, ok := requireUser(c)
@@ -99,7 +99,7 @@ func (h *traceHandler) list(c *gin.Context) {
 		return
 	}
 	limit := parseQueryInt(c, "limit", 20)
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(c, http.StatusOK, gin.H{
 		"traces": store.Recent(limit, u.ID),
 		"store":  store.Stats(),
 	})
@@ -114,14 +114,14 @@ func (h *traceHandler) write(c *gin.Context, store *tracing.SpanStore, traceID s
 	if !known || owner != u.ID {
 		// 用 404 而不是 403：403 等于确认"这条 trace 存在，只是不属于你"，
 		// 那就把 trace id 变成了一个可枚举的存在性预言机。
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "trace not found"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "trace not found"})
 		return
 	}
 	t, ok := store.Snapshot(traceID)
 	if !ok {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "trace not found"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "trace not found"})
 		return
 	}
 	c.Header("X-Trace-Span-Count", strconv.Itoa(t.SpanCount))
-	c.JSON(http.StatusOK, t)
+	writeJSON(c, http.StatusOK, t)
 }

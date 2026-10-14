@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -65,7 +66,7 @@ func RRFFusion(paths ...[]Hit) []Hit {
 
 	// 用 document_id + chunk_index 作为唯一标识
 	type docKey struct {
-		docID   int64
+		docID    int64
 		chunkIdx int
 	}
 
@@ -119,11 +120,11 @@ type KeywordSearcher interface {
 // HybridRetrieve 执行混合检索：向量检索 + 关键词检索 → RRF 融合 → 可选 Rerank。
 //
 // 流程：
-//   1. 向量检索召回 Top-N（如 50）
-//   2. 关键词检索召回 Top-N（如 50）
-//   3. RRF 融合两路结果
-//   4. 如果配置了 Reranker，对融合结果做重排序
-//   5. 返回最终 Top-K
+//  1. 向量检索召回 Top-N（如 50）
+//  2. 关键词检索召回 Top-N（如 50）
+//  3. RRF 融合两路结果
+//  4. 如果配置了 Reranker，对融合结果做重排序
+//  5. 返回最终 Top-K
 func (s *Service) HybridRetrieve(
 	ctx context.Context,
 	vecSearcher ChunkSearcher,
@@ -146,12 +147,12 @@ func (s *Service) HybridRetrieve(
 
 	// ---- 并行执行两路召回 ----
 	var (
-		vecHits   []model.DocumentChunk
-		vecErr    error
-		kwHits    []model.DocumentChunk
-		kwErr     error
-		vecReady  = make(chan struct{})
-		kwReady   = make(chan struct{})
+		vecHits  []model.DocumentChunk
+		vecErr   error
+		kwHits   []model.DocumentChunk
+		kwErr    error
+		vecReady = make(chan struct{})
+		kwReady  = make(chan struct{})
 	)
 
 	// 向量检索
@@ -187,6 +188,23 @@ func (s *Service) HybridRetrieve(
 	// 如果两路都失败，返回错误
 	if vecErr != nil && kwErr != nil {
 		return nil, fmt.Errorf("hybrid search: vector: %w, keyword: %w", vecErr, kwErr)
+	}
+
+	// 单路失败必须留痕，不能静默降级。
+	//
+	// 原实现只在"两路都失败"时报错，于是关键词那一路 100% 失败时（例如它的 SQL
+	// 引用了不存在的列），RRF 会悄悄退化成纯向量检索：检索结果变差，但日志、指标、
+	// 返回码全都没有任何信号——这类缺陷因此在 PG 路径上潜伏了很久。
+	//
+	// 这里只做可观测性，不改变语义：能出结果就仍然出结果（降级而非失败），
+	// 但把"哪一路挂了"显式记下来。查询文本本身不落日志，只记长度。
+	if kwErr != nil {
+		slog.Warn("hybrid 检索降级：关键词路失败，本次仅用向量路结果做 RRF",
+			"kb_id", kbID, "query_len", len(query), "error", kwErr)
+	}
+	if vecErr != nil {
+		slog.Warn("hybrid 检索降级：向量路失败，本次仅用关键词路结果做 RRF",
+			"kb_id", kbID, "query_len", len(query), "error", vecErr)
 	}
 
 	// 转成 Hit 格式
