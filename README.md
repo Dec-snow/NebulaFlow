@@ -525,6 +525,66 @@ NEBULA_TEST_REDIS_ADDR=127.0.0.1:6399 go test ./internal/ratelimit -run Redis -v
 
 每档位 1300 个任务，8 次运行全部 100% 落地、0 失败。
 
+#### 审计回合 1：执行锁粒度默认值变更 + 一批吞吐/可靠性缺陷的修复
+
+> 上面那张表的数字**没有被改动**（当时确实是那套代码跑出来的）。但本轮的修复改变了
+> 它们的**可复现条件**，所以在这里补一段说明，避免误读。
+
+**背景：执行锁曾经默认按「工作流」串行化。** 最初的执行锁只有一种粒度：同一工作流的
+任务互斥执行。这个直觉在"一个 DAG 内部不要并发"下是合理的，但当 1300 个任务全部属于
+同一条工作流时，20 个 worker 里同时只有一个能干活——任务吞吐被压到 **8.9 tasks/s**，
+端到端 p50 堆到约 98s，2 分钟排水窗口内还有 227 个任务没进终态。瓶颈不在 worker 数、
+不在连接池、也不在队列，而在锁的粒度。
+
+**修复：新增 `WORKFLOW_LOCK_SCOPE`，默认值从 `workflow` 改为 `task`。**
+
+| 取值 | 语义 | 适用场景 |
+| --- | --- | --- |
+| `task`（默认） | 只保证同一个任务不被重复执行 | 一般场景；任务之间本就相互独立 |
+| `workflow` | 同一工作流的任务串行执行（**即旧的默认行为**） | 工作流之间存在共享外部副作用时 |
+| `off` | 不取执行锁 | 单实例 / 已确认无并发执行风险 |
+
+**要回到旧的串行化行为**：设 `WORKFLOW_LOCK_SCOPE=workflow`，其余配置不用动。
+
+受控对照（同一个二进制、同一份负载，只改这一个变量，20 worker / 20 consumer / 单工作流）：
+`task` 粒度 **425.8 tasks/s**（落地率 100%、端到端 p50 1.48s），`workflow` 粒度
+**10.4 tasks/s**（排水 120s 超时、仍有 52 个任务未进终态、端到端 p50 42.8s）——相差约
+**41 倍**，这就是锁粒度确实是主因的直接证据。同机更早一次测量到的对应对照是
+493 tasks/s vs 8.9 tasks/s。
+
+**本轮新增的环境变量**
+
+| 变量 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `WORKFLOW_LOCK_SCOPE` | `task` | 执行锁粒度：`task` / `workflow` / `off`（见上表） |
+| `AUTH_RATE_LIMIT_PER_MIN` | `10` | `/api/auth/register` 与 `/api/auth/login` 的每分钟单 IP 限额 |
+
+**本轮修复摘要**（每条一行，括号内为验证方式）
+
+- **执行锁粒度**：默认工作流级串行 → 默认任务级（8.9 → 493 tasks/s；受控对照只改这一个变量）。
+- **队列重投丢失**：`XAUTOCLAIM` 重投的消息在重试耗尽后直接消失，任务永久停在 `pending` → 重投路径补上明确终态与 DLQ（`internal/queue/nack_regression_test.go`）。
+- **审批挂起/恢复**：任务进入审批态后无法被恢复执行 → 挂起后可再次唤醒（`internal/task/hub_replay_test.go`）。
+- **引擎错误消息丢失**：节点失败原因在回写状态时被丢掉，前端只看到"失败" → 错误消息完整透传。
+- **worker 关闭无上限**：关闭时等待在跑任务没有超时，进程可能永不退出 → 关闭有上限并强制收尾（`internal/worker/shutdown_regression_test.go`）。
+- **Provider 配置需重启才生效**：改完 Provider / 模型必须重启服务 → 改为热生效（`internal/store/provider_encryption_test.go`）。
+- **PG 模式下知识库曾经完全不可用**：`ListDocuments` / `GetDocument` / `UpdateDocumentIndexResult` / `KeywordSearch` 引用了一批**根本不存在的列**（`documents.chunks` / `size_kb` / `error_message`、`document_chunks.knowledge_base_id`、`documents.indexed`）——内存实现里这些字段都在，所以单测全绿、只有真实 PG 路径是烂的。现已修复，并补了走真实 PostgreSQL 的集成用例（`internal/store/` 下的 `knowledge_integration_test.go` / `hybrid_integration_test.go` / `task_priority_integration_test.go`）。
+- **全新数据库迁移跑不完（部署级 P0）**：`004_agent_memory.sql` 在**无维度**的 `vector` 列上直接建 HNSW 索引，空库执行迁移必然失败（`ERROR: column does not have dimensions (SQLSTATE 22023)`），而且失败不会被记进 `schema_migrations` → 每次启动重试、每次都失败 → **服务根本起不来**。修复是把 HNSW 索引的创建从 SQL 迁移移到 Go 侧的 `database.EnsureVectorSchema(dim)`：先按 `EMBED_DIM` 把列收敛成 `vector(N)` 再建索引（`IF NOT EXISTS`，幂等，与历史环境同名），同时删掉了 CI 里为绕过它而写的 psql bootstrap。验证见下方小节。
+- **已知待接线（本轮只记录、未改行为）**：`rag.HybridRetrieve`（RRF 混合检索）在**生产代码里没有任何调用方**——`GET /api/knowledge-bases/:id/retrieve` 走的是纯向量 `rag.Service.Retrieve`。所以"关键词那一路失败会被静默降级"目前是**潜伏状态**：混合检索只有集成用例在覆盖，HTTP 路径上并没有真正接线。
+
+**空库迁移的验证方式**：drop 掉 `nebulaflow` 库并重建（0 张表、连 vector 扩展都没装）后
+直接起服务——9 个迁移一次跑通、`/healthz` 200、`agent_memory.embedding_v` 与
+`document_chunks.embedding_v` 都收敛成 `vector(384)` 且带 `hnsw` + `vector_cosine_ops`
+索引；随后知识库上传 → 文档 `indexed`（1 分块）→ 检索按相关性排序返回
+（相关文档得分 0.5976、无关文档 0）。回归用例在
+`internal/database/migrate_integration_test.go`：它在**一个全新的临时库**上跑迁移，
+把旧迁移恢复回去时会精确复现 `SQLSTATE 22023`。
+
+**关于上面那张表的数字口径**：`task` 粒度下本轮复测到 425.8 / 426.1 / 429.3 tasks/s
+（三次各自全新启动的服务端，各 1300 个任务、100% 落地、端到端 p50 约 1.47s），与表中
+464.9 以及同机更早测到的 493 属同一量级。差的约 13% 来自**宿主机状态而非代码**：本机电源
+方案是「安静模式」（限制 CPU 频率），且同时挂着编辑器 / 模拟器 / 音乐播放器等 CPU 占用方。
+三次复测之间彼此的偏差只有 0.4%，说明测量本身很稳，差异在测量批次之间而不在代码里。
+
 #### 压测发现并修复的核心瓶颈：调度器串行消费
 
 首轮压测（修复前）发现任务吞吐**精确恒定在 `24.0 tasks/s`，与 `WORKER_COUNT` 完全无关**——四个档位数值一模一样，说明是结构性问题而非噪声。
