@@ -222,6 +222,18 @@ func (s *SpanStore) ensureLocked(traceID string) *traceRecord {
 }
 
 // Link 把 trace 与任务/用户关联起来，供 /api/tasks/:id/trace 与归属校验使用。
+//
+// 归属采用**首次写入者胜**（first-writer-wins）：
+//
+// 原实现是 `if ownerID != 0 { rec.ownerID = ownerID }`，无条件覆盖。
+// 而 trace id 是可以从外部**带进来的**（W3C `traceparent` 请求头）。
+// 于是任何攻击者只要拿到（或猜到）别人的 traceparent，发一次请求就能把
+// 这条 trace 的归属改成自己，随后 /api/traces/<id> 就能读到对方整条链路——
+// 而 span 里带着原始错误文本（可能含 SQL、表名、内网地址）。
+//
+// 一旦一条 trace 已经有非 0 的 owner，后来者就不能把它变成自己的；
+// 但 taskID 仍然照常补写（任务关联与归属是两件事：把任务索引补上不会泄露内容，
+// 因为按任务查 trace 的接口本身还要过 GetTask 的归属校验）。
 func (s *SpanStore) Link(traceID string, taskID, ownerID int64) {
 	if s == nil || traceID == "" {
 		return
@@ -237,7 +249,7 @@ func (s *SpanStore) Link(traceID string, taskID, ownerID int64) {
 		rec.taskID = taskID
 		s.taskTraceIdx[taskID] = traceID
 	}
-	if ownerID != 0 {
+	if ownerID != 0 && rec.ownerID == 0 {
 		rec.ownerID = ownerID
 	}
 }

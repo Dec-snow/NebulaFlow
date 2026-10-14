@@ -30,13 +30,13 @@ func (h *taskHandler) create(c *gin.Context) {
 	u := getUser(c)
 	var req createTaskReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	// 任务提交限流：user:{id}:tasks 每分钟上限
 	if h.limit > 0 {
 		if !h.svc.RateAllowed(c.Request.Context(), u.ID, h.limit) {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+			abortJSON(c, http.StatusTooManyRequests, gin.H{
 				"error": "task rate limit exceeded, max " + strconv.Itoa(h.limit) + " tasks/min",
 			})
 			return
@@ -53,7 +53,7 @@ func (h *taskHandler) create(c *gin.Context) {
 		return
 	}
 	c.Header("X-Task-Id", strconv.FormatInt(t.ID, 10))
-	c.JSON(http.StatusCreated, t)
+	writeJSON(c, http.StatusCreated, t)
 }
 
 // GET /api/tasks?limit=&offset=
@@ -66,7 +66,7 @@ func (h *taskHandler) list(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"tasks": list})
+	writeJSON(c, http.StatusOK, gin.H{"tasks": list})
 }
 
 // GET /api/tasks/:id
@@ -78,7 +78,7 @@ func (h *taskHandler) get(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, t)
+	writeJSON(c, http.StatusOK, t)
 }
 
 // POST /api/tasks/:id/cancel
@@ -89,7 +89,7 @@ func (h *taskHandler) cancel(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"cancelled": id})
+	writeJSON(c, http.StatusOK, gin.H{"cancelled": id})
 }
 
 // GET /api/tasks/:id/logs?limit=
@@ -102,7 +102,7 @@ func (h *taskHandler) logs(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"logs": logs})
+	writeJSON(c, http.StatusOK, gin.H{"logs": logs})
 }
 
 // GET /api/tasks/:id/timeline —— 执行时间线（前端 Timeline 组件用）
@@ -123,7 +123,7 @@ func (h *taskHandler) timeline(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, tl)
+	writeJSON(c, http.StatusOK, tl)
 }
 
 // GET /api/tasks/:id/stream —— SSE 实时执行流
@@ -142,7 +142,7 @@ func (h *taskHandler) stream(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		abortJSON(c, http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
 		return
 	}
 

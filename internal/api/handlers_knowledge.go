@@ -26,7 +26,7 @@ func (h *knowledgeHandler) createKB(c *gin.Context) {
 		Description string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	kb := &model.KnowledgeBase{UserID: u.ID, Name: req.Name, Description: req.Description}
@@ -34,7 +34,7 @@ func (h *knowledgeHandler) createKB(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, kb)
+	writeJSON(c, http.StatusCreated, kb)
 }
 
 // GET /api/knowledge-bases
@@ -45,7 +45,7 @@ func (h *knowledgeHandler) listKB(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"knowledge_bases": list})
+	writeJSON(c, http.StatusOK, gin.H{"knowledge_bases": list})
 }
 
 // DELETE /api/knowledge-bases/:id
@@ -56,7 +56,7 @@ func (h *knowledgeHandler) deleteKB(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"deleted": id})
+	writeJSON(c, http.StatusOK, gin.H{"deleted": id})
 }
 
 // GET /api/knowledge-bases/:id/documents
@@ -68,7 +68,7 @@ func (h *knowledgeHandler) listDocs(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	} else if !ok {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "knowledge base not found"})
 		return
 	}
 	docs, err := h.store.Knowledge.ListDocuments(c.Request.Context(), id)
@@ -76,7 +76,7 @@ func (h *knowledgeHandler) listDocs(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"documents": docs})
+	writeJSON(c, http.StatusOK, gin.H{"documents": docs})
 }
 
 // POST /api/knowledge-bases/:id/documents
@@ -92,7 +92,7 @@ func (h *knowledgeHandler) uploadDoc(c *gin.Context) {
 	if !ok {
 		// 原实现在 !ok 且 err==nil 时调用 abortWithError(c, nil)，
 		// 内部 err.Error() 直接 panic（gin.Recovery 只返回 500，真实原因丢失）。
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "knowledge base not found"})
 		return
 	}
 
@@ -104,14 +104,14 @@ func (h *knowledgeHandler) uploadDoc(c *gin.Context) {
 			Filename string `json:"filename"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		content, filename = req.Content, req.Filename
 	} else {
 		raw, err := c.GetRawData()
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
+			abortJSON(c, http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
 			return
 		}
 		content = string(raw)
@@ -122,7 +122,7 @@ func (h *knowledgeHandler) uploadDoc(c *gin.Context) {
 	}
 	content = extractPlainText(filename, content)
 	if strings.TrimSpace(content) == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "empty document"})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": "empty document"})
 		return
 	}
 
@@ -140,7 +140,7 @@ func (h *knowledgeHandler) uploadDoc(c *gin.Context) {
 		if err := h.indexer.Enqueue(doc); err != nil {
 			// 队列满时文档已创建但无法立即索引，返回 202 并提示稍后重试或自动排队。
 			// 这里选择返回成功但带 warning，让用户知道文档已上传、索引会延后。
-			c.JSON(http.StatusAccepted, gin.H{
+			writeJSON(c, http.StatusAccepted, gin.H{
 				"document": doc,
 				"warning":  "document uploaded, but index queue is full; will be retried later",
 			})
@@ -150,11 +150,11 @@ func (h *knowledgeHandler) uploadDoc(c *gin.Context) {
 		// 兼容未启用异步索引器的场景（如测试环境），退化为同步索引。
 		if err := h.indexDocument(c.Request.Context(), doc); err != nil {
 			_ = h.store.Knowledge.UpdateDocumentStatus(c.Request.Context(), doc.ID, model.DocFailed)
-			c.JSON(http.StatusOK, gin.H{"document": doc, "warning": "index failed: " + err.Error()})
+			writeJSON(c, http.StatusOK, gin.H{"document": doc, "warning": "index failed: " + err.Error()})
 			return
 		}
 	}
-	c.JSON(http.StatusCreated, doc)
+	writeJSON(c, http.StatusCreated, doc)
 }
 
 func (h *knowledgeHandler) indexDocument(ctx context.Context, doc *model.Document) error {
@@ -176,13 +176,24 @@ func (h *knowledgeHandler) indexDocument(ctx context.Context, doc *model.Documen
 func (h *knowledgeHandler) retrieve(c *gin.Context) {
 	kbID := mustID(c)
 	u := getUser(c)
-	if ok, _ := h.store.Knowledge.BelongsToUser(c.Request.Context(), kbID, u.ID); !ok {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+	// 归属校验必须区分"不属于你"（404）和"查不出来"（500）。
+	//
+	// 原实现是 `if ok, _ := ...; !ok` —— 把 err 丢掉了。后果是数据库/连接池故障时，
+	// 所有用户看到的都是 404「知识库不存在」：监控上没有任何 5xx，
+	// 用户却被告知"你的知识库没了"，排查方向从一开始就完全错了。
+	// 这与 auth.Login 里"数据库故障不能被伪装成凭据错误"是同一类缺陷。
+	ok, err := h.store.Knowledge.BelongsToUser(c.Request.Context(), kbID, u.ID)
+	if err != nil {
+		abortWithError(c, err)
+		return
+	}
+	if !ok {
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "knowledge base not found"})
 		return
 	}
 	query := c.Query("q")
 	if query == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "missing q param"})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": "missing q param"})
 		return
 	}
 	// 检索下推到存储层：只回传 Top-K，不再全量加载知识库分块
@@ -191,7 +202,7 @@ func (h *knowledgeHandler) retrieve(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"hits": hits})
+	writeJSON(c, http.StatusOK, gin.H{"hits": hits})
 }
 
 // extractPlainText 依据扩展名做最小文本抽取。

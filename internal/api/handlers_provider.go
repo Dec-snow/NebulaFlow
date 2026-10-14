@@ -33,7 +33,7 @@ func (h *providerHandler) list(c *gin.Context) {
 		}
 		out = append(out, providerResp{LLMProvider: p, Models: models})
 	}
-	c.JSON(http.StatusOK, gin.H{"providers": out})
+	writeJSON(c, http.StatusOK, gin.H{"providers": out})
 }
 
 // PUT /api/providers/:id —— 更新 Provider 配置
@@ -47,7 +47,7 @@ func (h *providerHandler) update(c *gin.Context) {
 		Priority  int    `json:"priority"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	p, err := h.store.Providers.GetProvider(c.Request.Context(), id)
@@ -74,7 +74,7 @@ func (h *providerHandler) update(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, p)
+	writeJSON(c, http.StatusOK, p)
 }
 
 // POST /api/providers —— 新增 Provider
@@ -86,7 +86,7 @@ func (h *providerHandler) create(c *gin.Context) {
 		Priority int    `json:"priority"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	p := &model.LLMProvider{
@@ -100,7 +100,7 @@ func (h *providerHandler) create(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, p)
+	writeJSON(c, http.StatusCreated, p)
 }
 
 // DELETE /api/providers/:id
@@ -110,7 +110,7 @@ func (h *providerHandler) delete(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"deleted": id})
+	writeJSON(c, http.StatusOK, gin.H{"deleted": id})
 }
 
 // POST /api/providers/:id/models —— 给 Provider 添加模型
@@ -121,7 +121,7 @@ func (h *providerHandler) addModel(c *gin.Context) {
 		MaxTokens int    `json:"max_tokens"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	if _, err := h.store.Providers.GetProvider(c.Request.Context(), providerID); err != nil {
@@ -136,7 +136,7 @@ func (h *providerHandler) addModel(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, m)
+	writeJSON(c, http.StatusCreated, m)
 }
 
 func maskKey(k string) string {

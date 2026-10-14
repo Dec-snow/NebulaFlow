@@ -60,8 +60,19 @@ func (l *RedisLimiter) Allow(ctx context.Context, key string, limit int, window 
 	}
 	if n == 1 {
 		if err := l.rdb.Expire(ctx, rkey, time.Duration(windowSec)*time.Second).Err(); err != nil {
-			// 过期设置失败会让 key 常驻（计数永不重置），降级为放行避免误杀
-			return Result{Allowed: true, Limit: int64(limit), Window: window}, nil
+			// 过期设置失败时必须**自愈**，否则这个 key 就变成一个没有 TTL 的
+			// 永久计数器：后续请求走到 n > 1 的分支，永远不会再尝试设置 TTL，
+			// 计数只增不减 —— 用户被**永久** 429，重启服务才能恢复。
+			//
+			// 原实现只是"降级为放行"（返回 Allowed=true）就返回了，
+			// 放行这一次请求，却把那个毒 key 留在了 Redis 里：这次放行，
+			// 之后每一次都被拒。这是最糟糕的组合——故障的瞬间看起来没事，
+			// 真正的问题在一个窗口之后才爆发出来。
+			//
+			// 所以这里直接删掉这个 key（下次请求从 n=1 重新开始，能重新设置 TTL），
+			// 并把错误上报给中间件，由它按降级策略处理（放行）。
+			_ = l.rdb.Del(ctx, rkey).Err()
+			return Result{Allowed: true, Limit: int64(limit), Window: window}, err
 		}
 	}
 	allowed := n <= int64(limit)

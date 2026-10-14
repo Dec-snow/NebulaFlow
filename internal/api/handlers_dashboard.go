@@ -51,7 +51,7 @@ func (h *dashboardHandler) stats(c *gin.Context) {
 		sseUsers = s.Users
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(c, http.StatusOK, gin.H{
 		"queue_length":    queueLen, // 待消费任务（含延迟重投）
 		"worker_queued":   queued,   // Worker Pool 内排队待执行的节点
 		"active_workers":  active,   // 正在执行节点的 worker
@@ -67,7 +67,7 @@ func (h *dashboardHandler) stats(c *gin.Context) {
 // GET /api/dashboard/usage —— token 用量汇总（从 usage_records 表聚合）
 func (h *dashboardHandler) usage(c *gin.Context) {
 	if h.store == nil || h.store.Tasks == nil {
-		c.JSON(http.StatusOK, gin.H{
+		writeJSON(c, http.StatusOK, gin.H{
 			"total_input_tokens":  0,
 			"total_output_tokens": 0,
 			"total_requests":      0,
@@ -78,7 +78,7 @@ func (h *dashboardHandler) usage(c *gin.Context) {
 	}
 	totalInput, totalOutput, totalReqs, perProvider, err := h.store.Tasks.UsageSummary(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
+		writeJSON(c, http.StatusOK, gin.H{
 			"total_input_tokens":  0,
 			"total_output_tokens": 0,
 			"total_requests":      0,
@@ -90,7 +90,7 @@ func (h *dashboardHandler) usage(c *gin.Context) {
 	if perProvider == nil {
 		perProvider = []store.ProviderUsage{}
 	}
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(c, http.StatusOK, gin.H{
 		"total_input_tokens":  totalInput,
 		"total_output_tokens": totalOutput,
 		"total_requests":      totalReqs,

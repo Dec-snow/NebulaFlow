@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -220,10 +221,15 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		// 只在 postgres 模式下跑迁移：memory 模式每次启动都是空的，没必要。
 		if !memMode {
 			if _, err := encProvider.MigratePlaintextKeys(runCtx, logger); err != nil {
-				logger.Error("provider key migration failed", "error", err)
-				// 迁移失败不阻断启动：装饰器的"宽容读取"依然能正常工作，
-				// 只是存量数据还是明文。比起直接拒绝服务，这是更安全的降级。
-				// 运维可以从日志里发现问题后手动修复。
+				// 迁移失败必须阻断启动（fail-closed）。
+				//
+				// 原实现"只记日志、照样启动"，而当时的迁移判定是"解密成功=已加密、
+				// 否则=明文"——用错 ENCRYPTION_KEY 启动一次就会把已有密文**再加密一层**，
+				// 旧密钥没备份时 API Key 永久不可恢复，日志里却只有一行"迁移成功"。
+				// 现在迁移本身已改成两阶段：只要有一条密文解不开就一条都不写并返回错误，
+				// 这里再把错误升级为拒绝启动，避免"带着错密钥继续跑"这种最坏组合
+				// （表现为把 base64 密文当 Bearer token 发给上游）。
+				return fmt.Errorf("provider api key migration failed (检查 ENCRYPTION_KEY 是否与库中密文匹配): %w", err)
 			}
 		}
 		st.Providers = encProvider
@@ -243,6 +249,10 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			MaxLen:     cfg.QueueMaxLen,
 			DLQMaxLen:  cfg.QueueDLQMaxLen,
 			AdmitRatio: cfg.QueueAdmitRatio,
+			// 崩溃恢复的空闲阈值必须大于任务最长执行时间，否则滚动发布时
+			// XAUTOCLAIM 会把别的实例正在跑的长任务当成遗留重新投递 → 同一任务
+			// 被两个消费者并发执行（重复计费、重复副作用）。库默认 30s 只适合短任务。
+			RecoverMinIdle: time.Duration(cfg.TaskTimeoutSec)*time.Second + time.Minute,
 		}); err == nil {
 			q = rq
 			logger.Info("task queue: redis stream",
@@ -341,17 +351,37 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	sched.SetTracing(tp)
 
 	// 分布式锁：有 Redis 就用 Redis 分布式锁（SET NX EX + Lua DEL），
-	// 防止同一工作流在多实例上并发执行；否则退回进程内锁。
-	// 内存模式下也用进程内锁——单实例足够，不需要 Redis。
+	// 防止同一任务（默认）或同一工作流（显式配置）在多个实例上并发执行；
+	// 否则退回进程内锁。内存模式下也用进程内锁——单实例足够，不需要 Redis。
+	//
+	// 粒度默认是 task，理由见 internal/scheduler.LockScope：
+	// 按工作流加锁会把"同一任务不被两个实例重复执行"退化成"整条工作流串行"，
+	// 实测（loadgen 1200 任务 / 20 worker / 单工作流）吞吐 493.5 → 8.9 tasks/s、
+	// p50 端到端 1.31s → 97.9s。需要工作流级串行化的场景用
+	// WORKFLOW_LOCK_SCOPE=workflow 显式打开。
+	lockScope, scopeOK := scheduler.ParseLockScope(cfg.WorkflowLockScope)
+	if !scopeOK {
+		logger.Warn("unknown WORKFLOW_LOCK_SCOPE, falling back to task scope",
+			"configured", cfg.WorkflowLockScope, "valid", "task|workflow|off")
+	}
+
+	// 锁 TTL 必须大于任务超时，否则超长任务会在执行中途丢锁，
+	// 另一个实例随即拿到同一把锁 → 并发执行（正是这把锁要防的问题）。
+	// 原实现把 TTL 硬编码成 10 分钟，与 TASK_TIMEOUT_SEC 无关：
+	// 只要把任务超时配到 600s 以上，互斥就静默失效。
+	lockTTL := time.Duration(cfg.TaskTimeoutSec)*time.Second + 5*time.Minute
+
 	var wfLock scheduler.WorkflowLock
 	if rdb != nil {
-		wfLock = scheduler.NewRedisWorkflowLock(rdb, 10*time.Minute)
-		logger.Info("workflow distributed lock enabled", "backend", "redis", "ttl", "10m")
+		wfLock = scheduler.NewRedisWorkflowLock(rdb, lockTTL)
+		logger.Info("execution lock enabled", "backend", "redis",
+			"scope", lockScope.String(), "ttl", lockTTL.String())
 	} else {
 		wfLock = scheduler.NewMemoryWorkflowLock()
-		logger.Info("workflow lock enabled", "backend", "in-process")
+		logger.Info("execution lock enabled", "backend", "in-process", "scope", lockScope.String())
 	}
 	sched.SetWorkflowLock(wfLock)
+	sched.SetLockScope(lockScope)
 
 	// ---------- 5. HTTP API ----------
 	// Agent Registry：注册中心 + Runtime 工厂
@@ -384,6 +414,7 @@ func run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 			CORSOrigins:         cfg.CORSOrigins,
 			RateLimitPerMin:     cfg.RateLimitPerMin,
 			TaskRateLimitPerMin: cfg.TaskRateLimitPerMin,
+			AuthRateLimitPerMin: cfg.AuthRateLimitPerMin,
 			WorkerCount:         cfg.WorkerCount,
 		}).WithAgentRegistry(agentReg)
 	httpSrv := &http.Server{
@@ -494,10 +525,33 @@ func reportRuntimeStats(ctx context.Context, db *database.DB, wf *store.CachedWo
 // buildLLM 从数据库加载 Provider 配置，装配 Gateway 与 Embedder。
 // 无配置时回退到 Mock Provider，保证离线可演示。
 func buildLLM(ctx context.Context, st *store.Store, cfg *config.Config, logger *slog.Logger) (*llm.Gateway, *llm.EmbeddingGateway) {
-	// newMock 统一装配兜底 Provider。AutoToolCall 由 LLM_MOCK_TOOL_CALL 控制：
-	// 打开后，只要节点开启了 Agent 模式（请求里带了 tools），Mock 就会发起一次
-	// 工具调用，从而在没有任何真实模型 key 的情况下也能端到端看到
-	// "模型自主调用工具 → 结果回灌 → 给出最终回答"这条链路。
+	providers, list, mockOnly := loadProviders(ctx, st, cfg, logger)
+
+	// 只有 Mock 兜底时用 30s：原来的行为就是这样，别顺手改掉历史基线。
+	attemptTimeout := 60 * time.Second
+	if mockOnly {
+		attemptTimeout = 30 * time.Second
+	}
+	gateway := llm.NewGateway(list, logger, attemptTimeout, nil)
+	// 运行期热更新：用户在 UI 里配好 provider 后应当立刻生效。
+	startProviderRefresh(ctx, st, cfg, gateway, logger)
+
+	// Embedder：优先从 DB 中的 ollama provider 取 BaseURL，否则用配置
+	embedURL := cfg.OllamaURL
+	for _, p := range providers {
+		if p.Enabled && p.Name == "ollama" && p.BaseURL != "" {
+			embedURL = p.BaseURL
+			break
+		}
+	}
+	embedder := llm.NewEmbeddingGateway(llm.NewOllamaEmbedder(embedURL, cfg.OllamaEmbedModel), llm.NewLocalHashEmbedder(0))
+	return gateway, embedder
+}
+
+// loadProviders 从库里读 Provider 配置并翻译成 llm.Provider 列表。
+// 抽成独立函数是为了让"启动时装配"和"运行期刷新"走同一段逻辑——
+// 两份实现早晚会漂移。
+func loadProviders(ctx context.Context, st *store.Store, cfg *config.Config, logger *slog.Logger) ([]model.LLMProvider, []llm.Provider, bool) {
 	newMock := func() *llm.MockProvider {
 		m := llm.NewMockProvider("mock")
 		m.AutoToolCall = cfg.MockToolCall
@@ -506,11 +560,17 @@ func buildLLM(ctx context.Context, st *store.Store, cfg *config.Config, logger *
 
 	providers, err := st.Providers.ListProviders(ctx)
 	if err != nil || len(providers) == 0 {
-		logger.Warn("no llm provider configured, using mock provider for demo",
-			"mock_tool_call", cfg.MockToolCall)
-		gateway := llm.NewGateway([]llm.Provider{newMock()}, logger, 30*time.Second, nil)
-		embedder := llm.NewEmbeddingGateway(nil, llm.NewLocalHashEmbedder(0))
-		return gateway, embedder
+		// 区分"读失败"与"确实没配"：原实现把两者并成同一句
+		// "no llm provider configured"，于是数据库故障/密钥不匹配会被静默
+		// 降级成 Mock 输出（用户看到的是 [mock-...] 前缀，却查不到任何错误）。
+		if err != nil {
+			logger.Error("list llm providers failed, falling back to mock provider",
+				"error", err, "hint", "检查数据库连通性与 ENCRYPTION_KEY 是否匹配库中密文")
+		} else {
+			logger.Warn("no llm provider configured, using mock provider for demo",
+				"mock_tool_call", cfg.MockToolCall)
+		}
+		return providers, []llm.Provider{newMock()}, true
 	}
 
 	var list []llm.Provider
@@ -535,20 +595,57 @@ func buildLLM(ctx context.Context, st *store.Store, cfg *config.Config, logger *
 	}
 	if len(list) == 0 {
 		list = append(list, newMock())
+		return providers, list, true
 	}
+	return providers, list, false
+}
 
-	gateway := llm.NewGateway(list, logger, 60*time.Second, nil)
+// providerRefreshInterval 是运行期刷新 Provider 配置的周期。
+//
+// 为什么用轮询而不是在 provider 的增删改接口里回调：
+//  1. 不需要让 API 层反向依赖装配层（也不需要在 handler 里塞一个 hook）；
+//  2. 多实例部署时，任何实例上的配置变更都会被所有实例看到；
+//  3. 代价是一次 ListProviders 查询（15s 一次，内存模式几乎为零）。
+//
+// 原实现只在进程启动时读一次：用户在 UI 里配好 API Key、建好工作流、点运行，
+// 拿到的却是 Mock 兜底的输出（形如 `[mock-mock:gpt-4o] echo: ...`），
+// 而且没有任何报错——"改了配置没反应"是最难排查的一类问题。
+// 取 5s 而不是更长：这是一次廉价的 ListProviders（内存模式几乎为零开销），
+// 而用户的预期是"配好就能用"。
+var providerRefreshInterval = 5 * time.Second
 
-	// Embedder：优先从 DB 中的 ollama provider 取 BaseURL，否则用配置
-	embedURL := cfg.OllamaURL
-	for _, p := range providers {
-		if p.Enabled && p.Name == "ollama" && p.BaseURL != "" {
-			embedURL = p.BaseURL
-			break
+func startProviderRefresh(ctx context.Context, st *store.Store, cfg *config.Config,
+	gateway *llm.Gateway, logger *slog.Logger) {
+	go func() {
+		tick := time.NewTicker(providerRefreshInterval)
+		defer tick.Stop()
+		sig := providerSignature(gateway.Providers())
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			_, list, _ := loadProviders(ctx, st, cfg, logger)
+			newSig := providerSignature(list)
+			if newSig == sig {
+				continue
+			}
+			gateway.SetProviders(list)
+			sig = newSig
+			logger.Info("llm providers refreshed", "providers", len(list))
 		}
+	}()
+}
+
+// providerSignature 是 provider 列表的便宜指纹，用来判断"变没变"。
+// 只取会影响调用的字段（名字 + base_url），不含 API Key——密钥不该进日志。
+func providerSignature(list []llm.Provider) string {
+	parts := make([]string, 0, len(list))
+	for _, p := range list {
+		parts = append(parts, p.Name())
 	}
-	embedder := llm.NewEmbeddingGateway(llm.NewOllamaEmbedder(embedURL, cfg.OllamaEmbedModel), llm.NewLocalHashEmbedder(0))
-	return gateway, embedder
+	return strings.Join(parts, ",")
 }
 
 // verifyEmbedDim 用一次真实 embedding 调用核对配置维度与 Embedder 实际输出维度。

@@ -47,7 +47,7 @@ func (h *agentHandler) list(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"agents": agents, "total": len(agents)})
+	writeJSON(c, http.StatusOK, gin.H{"agents": agents, "total": len(agents)})
 }
 
 // POST /api/agents
@@ -55,7 +55,7 @@ func (h *agentHandler) create(c *gin.Context) {
 	u := getUser(c)
 	var p agentPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -75,13 +75,13 @@ func (h *agentHandler) create(c *gin.Context) {
 	if err := h.registry.Register(c.Request.Context(), a); err != nil {
 		// 不支持的 runtime_type 返回 400
 		if strings.Contains(err.Error(), "unsupported runtime type") {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, a)
+	writeJSON(c, http.StatusCreated, a)
 }
 
 // GET /api/agents/:id
@@ -96,10 +96,10 @@ func (h *agentHandler) get(c *gin.Context) {
 	}
 	// 权限校验：只能看自己的 Agent（系统内置的 user_id=0 所有人可见）
 	if a.UserID != 0 && a.UserID != u.ID {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "agent not found"})
 		return
 	}
-	c.JSON(http.StatusOK, a)
+	writeJSON(c, http.StatusOK, a)
 }
 
 // PUT /api/agents/:id
@@ -114,13 +114,13 @@ func (h *agentHandler) update(c *gin.Context) {
 		return
 	}
 	if existing.UserID != u.ID {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "not your agent"})
+		abortJSON(c, http.StatusForbidden, gin.H{"error": "not your agent"})
 		return
 	}
 
 	var p agentPayload
 	if err := c.ShouldBindJSON(&p); err != nil {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -145,7 +145,7 @@ func (h *agentHandler) update(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, existing)
+	writeJSON(c, http.StatusOK, existing)
 }
 
 // DELETE /api/agents/:id
@@ -160,7 +160,7 @@ func (h *agentHandler) delete(c *gin.Context) {
 		return
 	}
 	if existing.UserID != u.ID {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "not your agent"})
+		abortJSON(c, http.StatusForbidden, gin.H{"error": "not your agent"})
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *agentHandler) delete(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	writeJSON(c, http.StatusOK, gin.H{"ok": true})
 }
 
 // GET /api/agents/:id/health —— 健康检查
@@ -185,14 +185,14 @@ func (h *agentHandler) health(c *gin.Context) {
 		return
 	}
 	if a.UserID != 0 && a.UserID != u.ID {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "agent not found"})
 		return
 	}
 
 	rt, err := h.registry.GetRuntime(c.Request.Context(), id)
 	if err != nil {
 		// Runtime 创建失败也是不健康
-		c.JSON(http.StatusOK, gin.H{
+		writeJSON(c, http.StatusOK, gin.H{
 			"agent_id": id,
 			"healthy":  false,
 			"error":    err.Error(),
@@ -204,7 +204,7 @@ func (h *agentHandler) health(c *gin.Context) {
 	err = rt.HealthCheck(c.Request.Context())
 	md := agent.MetadataWithHealth(c.Request.Context(), rt)
 
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(c, http.StatusOK, gin.H{
 		"agent_id":    id,
 		"healthy":     md.Healthy,
 		"error":       "",
@@ -225,7 +225,7 @@ func (h *agentHandler) capabilities(c *gin.Context) {
 		{"value": string(agent.CapSearch), "label": "联网搜索 (Search)"},
 		{"value": string(agent.CapMultimodal), "label": "多模态 (Multimodal)"},
 	}
-	c.JSON(http.StatusOK, gin.H{"capabilities": caps})
+	writeJSON(c, http.StatusOK, gin.H{"capabilities": caps})
 }
 
 // GET /api/agents/runtime-types —— Runtime 类型列表
@@ -237,7 +237,7 @@ func (h *agentHandler) runtimeTypes(c *gin.Context) {
 		{"value": string(model.RuntimeLangChain), "label": "LangChain（LangServe HTTP）"},
 		{"value": string(model.RuntimeHTTP), "label": "HTTP（通用 HTTP Agent）"},
 	}
-	c.JSON(http.StatusOK, gin.H{"runtime_types": types})
+	writeJSON(c, http.StatusOK, gin.H{"runtime_types": types})
 }
 
 // GET /api/agents/discover?capability=xxx —— 按能力发现 Agent
@@ -248,7 +248,7 @@ func (h *agentHandler) discover(c *gin.Context) {
 	u := getUser(c)
 	cap := c.Query("capability")
 	if cap == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "capability parameter is required"})
+		abortJSON(c, http.StatusBadRequest, gin.H{"error": "capability parameter is required"})
 		return
 	}
 
@@ -257,7 +257,7 @@ func (h *agentHandler) discover(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"agents": agents, "total": len(agents), "capability": cap})
+	writeJSON(c, http.StatusOK, gin.H{"agents": agents, "total": len(agents), "capability": cap})
 }
 
 // ---------- Agent 市场 ----------
@@ -288,7 +288,7 @@ func (h *agentHandler) marketplaceList(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	writeJSON(c, http.StatusOK, gin.H{
 		"agents":          agents,
 		"total":           len(agents),
 		"installed_names": installedNames,
@@ -306,10 +306,10 @@ func (h *agentHandler) marketplaceDetail(c *gin.Context) {
 	}
 	// 市场详情只返回系统内置 Agent
 	if a.UserID != 0 {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "agent not found in marketplace"})
+		abortJSON(c, http.StatusNotFound, gin.H{"error": "agent not found in marketplace"})
 		return
 	}
-	c.JSON(http.StatusOK, a)
+	writeJSON(c, http.StatusOK, a)
 }
 
 // POST /api/agents/marketplace/:id/install —— 一键安装 Agent 到用户注册中心
@@ -322,7 +322,7 @@ func (h *agentHandler) marketplaceInstall(c *gin.Context) {
 		abortWithError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{
+	writeJSON(c, http.StatusCreated, gin.H{
 		"agent_id": installed.ID,
 		"name":     installed.Name,
 		"message":  "Agent 已安装到你的注册中心",
