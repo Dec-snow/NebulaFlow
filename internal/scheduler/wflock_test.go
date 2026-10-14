@@ -228,6 +228,7 @@ func TestExecuteTaskAcquiresAndReleasesWorkflowLock(t *testing.T) {
 
 	lock := newTrackingLock(NewMemoryWorkflowLock())
 	rig.sched.SetWorkflowLock(lock)
+	rig.sched.SetLockScope(LockScopeWorkflow) // 本用例验证的是工作流级粒度
 
 	tk := &model.Task{ID: 200, WorkflowID: 1, UserID: 1, Status: model.TaskPending, Input: "hello"}
 	rig.tasks.seed(tk)
@@ -267,6 +268,7 @@ func TestExecuteTaskRequeuesWhenWorkflowLocked(t *testing.T) {
 	lock := newTrackingLock(NewMemoryWorkflowLock())
 	lock.acquireErr = ErrWorkflowLocked
 	rig.sched.SetWorkflowLock(lock)
+	rig.sched.SetLockScope(LockScopeWorkflow)
 
 	// 先入队，这样 Nack 才有消息可操作
 	tk := &model.Task{ID: 201, WorkflowID: 1, UserID: 1, Status: model.TaskPending, Input: "x"}
@@ -280,8 +282,11 @@ func TestExecuteTaskRequeuesWhenWorkflowLocked(t *testing.T) {
 	defer cancel()
 	go rig.sched.consumeLoop(ctx, "wf-lock-test")
 
-	// 等 consumeLoop 消费并尝试获取锁
-	time.Sleep(200 * time.Millisecond)
+	// 等 consumeLoop 消费并尝试获取锁。
+	//
+	// 300ms 覆盖了"锁竞争重投的固定延迟"（lockRetryDelay=500ms 之前的那次尝试是立即发生的，
+	// 所以这里只需要等第一轮 + 一次重投的调度）。
+	time.Sleep(900 * time.Millisecond)
 
 	// 装置自检：锁确实被尝试获取了（至少一次）
 	if acq := lock.acquireCount(1); acq < 1 {
@@ -313,6 +318,7 @@ func TestExecuteTaskDifferentWorkflowsLockIndependently(t *testing.T) {
 	rig := newTestRig(t, wfOf(1, 1, wf1Nodes, wf1Edges))
 	lock := newTrackingLock(NewMemoryWorkflowLock())
 	rig.sched.SetWorkflowLock(lock)
+	rig.sched.SetLockScope(LockScopeWorkflow)
 
 	// wf 1 的任务
 	tk1 := &model.Task{ID: 210, WorkflowID: 1, UserID: 1, Status: model.TaskPending, Input: "a"}
@@ -324,6 +330,7 @@ func TestExecuteTaskDifferentWorkflowsLockIndependently(t *testing.T) {
 	// wf 2 的任务（需要另一份工作流）
 	rig2 := newTestRig(t, wfOf(2, 1, wf1Nodes, wf1Edges))
 	rig2.sched.SetWorkflowLock(lock) // 共用同一个锁实例
+	rig2.sched.SetLockScope(LockScopeWorkflow)
 	tk2 := &model.Task{ID: 211, WorkflowID: 2, UserID: 1, Status: model.TaskPending, Input: "b"}
 	rig2.tasks.seed(tk2)
 	if err := rig2.run(t, tk2.ID); err != nil {
