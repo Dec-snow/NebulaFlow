@@ -238,17 +238,46 @@ func (d *DB) Migrate(ctx context.Context) error {
 // migrateLockKey 是本服务专用的 advisory lock 常量。
 const migrateLockKey = 727001
 
-// EnsureVectorSchema 把 document_chunks 的向量存储收敛到「可被索引检索」的状态。
+// vectorColumnSpec 描述一个需要收敛到「定维 + HNSW 索引」的向量列。
 //
-// 做三件事，顺序有讲究：
-//  1. 校验 embedding_v 的维度等于 dim，不一致就 ALTER 修正；
+// 做成表而不是写死两段代码，是因为 document_chunks 与 agent_memory 的收敛
+// 步骤必须完全一致——历史上的缺陷恰恰是其中一处（004_agent_memory.sql）
+// 忘了「HNSW 要求定维」这条约束，于是全新数据库上迁移直接失败。
+type vectorColumnSpec struct {
+	// Table / Column 是要收敛的列，Index 是要建的 HNSW 索引名。
+	Table  string
+	Column string
+	Index  string
+	// Hint 是列缺失时的排查提示（指向应该建出它的迁移文件）。
+	Hint string
+}
+
+// vecColumns 是全部需要收敛的向量列。新增向量列时加在这里，
+// 不要在 SQL 迁移文件里建 HNSW 索引。
+var vecColumns = []vectorColumnSpec{
+	{
+		Table: "document_chunks", Column: "embedding_v", Index: "idx_chunks_embedding_hnsw",
+		Hint: "迁移 002_pgvector.sql 未生效",
+	},
+	{
+		Table: "agent_memory", Column: "embedding_v", Index: "idx_agent_memory_embedding",
+		Hint: "迁移 004_agent_memory.sql 未生效",
+	},
+}
+
+// EnsureVectorSchema 把所有向量列收敛到「可被索引检索」的状态。
+//
+// 对 vecColumns 里的每一列做三件事，顺序有讲究：
+//  1. 校验列的维度等于 dim，不一致就 ALTER 修正；
 //  2. 建 HNSW 余弦索引；
-//  3. 删掉历史的 JSONB embedding 列。
 //
-// 为什么这三件事不写在 SQL 迁移文件里：
+// 最后再删掉 document_chunks 历史的 JSONB embedding 列。
+//
+// 为什么这些事不写在 SQL 迁移文件里：
 //   - 维度来自配置（EMBED_DIM），SQL 文件无法参数化；
-//   - pgvector 的 HNSW 索引要求列有确定维度，而 002 迁移建的是无维度列
-//     （实测：对无维度列建索引直接报 "column does not have dimensions"）。
+//   - pgvector 的 HNSW 索引要求列有确定维度，而迁移文件建的是无维度列
+//     （实测：对无维度列建索引直接报 "column does not have dimensions"，
+//      这正是 004_agent_memory.sql 曾经导致全新数据库迁移失败的原因）。
 //
 // 为什么删列放在最后：只有确认向量列已能正确索引，才丢弃源数据。
 // 中途任何一步失败都直接返回，历史 embedding 原封不动，可以安全重跑。
@@ -260,46 +289,73 @@ func (d *DB) EnsureVectorSchema(ctx context.Context, dim int) error {
 		return fmt.Errorf("EMBED_DIM 必须是正整数，当前为 %d", dim)
 	}
 
-	var current string
-	err := d.Pool.QueryRow(ctx, `
-		SELECT format_type(atttypid, atttypmod)
-		  FROM pg_attribute
-		 WHERE attrelid = 'document_chunks'::regclass
-		   AND attname  = 'embedding_v'
-		   AND NOT attisdropped`).Scan(&current)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errors.New("document_chunks.embedding_v 不存在：迁移 002_pgvector.sql 未生效")
-	}
-	if err != nil {
-		return fmt.Errorf("读取 embedding_v 列类型: %w", err)
-	}
-
-	want := fmt.Sprintf("vector(%d)", dim)
-	if current != want {
-		// 已有数据必须全部匹配 dim，否则 ALTER 会失败。这是刻意的：
-		// 维度对不上说明 Embedder 换过，必须显式重新索引整个知识库，
-		// 而不是让一批错误维度的向量静默留在库里、检索时给出无意义结果。
-		if _, err := d.Pool.Exec(ctx,
-			fmt.Sprintf(`ALTER TABLE document_chunks ALTER COLUMN embedding_v TYPE %s`, want),
-		); err != nil {
-			return fmt.Errorf(
-				"把 embedding_v 从 %s 改为 %s 失败（EMBED_DIM 与库中已有向量维度不一致，需清空 document_chunks 后重新索引）: %w",
-				current, want, err)
+	for _, spec := range vecColumns {
+		if err := d.ensureVectorColumn(ctx, spec, dim); err != nil {
+			return err
 		}
-	}
-
-	// HNSW + 余弦距离。vector_cosine_ops 与查询侧的 `<=>` 必须配套，
-	// 否则索引不会被规划器命中（会退化成顺序扫描）。
-	if _, err := d.Pool.Exec(ctx, `
-		CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw
-		ON document_chunks USING hnsw (embedding_v vector_cosine_ops)`); err != nil {
-		return fmt.Errorf("创建 HNSW 索引: %w", err)
 	}
 
 	// 向量列已就绪，丢弃历史的 JSONB 列（数据已在 002 迁移里回填）
 	if _, err := d.Pool.Exec(ctx,
 		`ALTER TABLE document_chunks DROP COLUMN IF EXISTS embedding`); err != nil {
 		return fmt.Errorf("删除历史 embedding 列: %w", err)
+	}
+	return nil
+}
+
+// ensureVectorColumn 把单个列收敛到 vector(dim) 并保证 HNSW 索引存在。
+//
+// 每一步都幂等：列已是目标维度就跳过 ALTER，索引用 IF NOT EXISTS，
+// 因此对「迁移已执行过的历史环境」与「全新数据库」两条路径结果一致。
+func (d *DB) ensureVectorColumn(ctx context.Context, spec vectorColumnSpec, dim int) error {
+	// 表本身可能不存在（迁移未跑完）。用 to_regclass 判断，
+	// 避免 "relation does not exist" 这种信息量很低的报错。
+	var tableExists bool
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT to_regclass($1) IS NOT NULL`, spec.Table).Scan(&tableExists); err != nil {
+		return fmt.Errorf("检查表 %s 是否存在: %w", spec.Table, err)
+	}
+	if !tableExists {
+		return fmt.Errorf("表 %s 不存在：%s", spec.Table, spec.Hint)
+	}
+
+	var current string
+	err := d.Pool.QueryRow(ctx, `
+		SELECT format_type(atttypid, atttypmod)
+		  FROM pg_attribute
+		 WHERE attrelid = $1::regclass
+		   AND attname  = $2
+		   AND NOT attisdropped`, spec.Table, spec.Column).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%s.%s 不存在：%s", spec.Table, spec.Column, spec.Hint)
+	}
+	if err != nil {
+		return fmt.Errorf("读取 %s.%s 列类型: %w", spec.Table, spec.Column, err)
+	}
+
+	want := fmt.Sprintf("vector(%d)", dim)
+	if current != want {
+		// 已有数据必须全部匹配 dim，否则 ALTER 会失败。这是刻意的：
+		// 维度对不上说明 Embedder 换过，必须显式重新索引，
+		// 而不是让一批错误维度的向量静默留在库里、检索时给出无意义结果。
+		//
+		// 表名/列名是本文件里的常量，不存在注入面；标识符也无法参数化。
+		if _, err := d.Pool.Exec(ctx, fmt.Sprintf(
+			`ALTER TABLE %s ALTER COLUMN %s TYPE %s`, spec.Table, spec.Column, want),
+		); err != nil {
+			return fmt.Errorf(
+				"把 %s.%s 从 %s 改为 %s 失败（EMBED_DIM 与库中已有向量维度不一致，需清空该表后重新索引）: %w",
+				spec.Table, spec.Column, current, want, err)
+		}
+	}
+
+	// HNSW + 余弦距离。vector_cosine_ops 与查询侧的 `<=>` 必须配套，
+	// 否则索引不会被规划器命中（会退化成顺序扫描）。
+	if _, err := d.Pool.Exec(ctx, fmt.Sprintf(
+		`CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw (%s vector_cosine_ops)`,
+		spec.Index, spec.Table, spec.Column),
+	); err != nil {
+		return fmt.Errorf("创建 %s 的 HNSW 索引: %w", spec.Table, err)
 	}
 	return nil
 }
