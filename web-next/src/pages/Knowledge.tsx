@@ -49,7 +49,12 @@ export default function Knowledge() {
   const kb = bases?.find((k) => k.id === selected) ?? bases?.[0];
   if (!kb) return <EmptyState icon={<Database size={19} />} title="暂无知识库" />;
 
-  const totalChunks = kb.docs.reduce((s, d) => s + d.chunks, 0);
+  // 知识库列表接口不下发 documents（后端另有 GET /knowledge/bases/:id/documents），
+  // 直接 kb.docs.reduce 会在真实接口下抛 TypeError。
+  const docs = kb.docs ?? [];
+  const docsLoaded = Array.isArray(kb.docs);
+
+  const totalChunks = docs.reduce((s, d) => s + d.chunks, 0);
 
   return (
     <div className="space-y-6">
@@ -70,7 +75,8 @@ export default function Knowledge() {
         <div className="space-y-2.5">
           {bases?.map((k) => {
             const active = k.id === selected;
-            const chunks = k.docs.reduce((s, d) => s + d.chunks, 0);
+            const kDocs = k.docs ?? [];
+            const chunks = kDocs.reduce((s, d) => s + d.chunks, 0);
             return (
               <button
                 key={k.id}
@@ -99,7 +105,9 @@ export default function Knowledge() {
                       {k.description}
                     </div>
                     <div className="mt-2 flex items-center gap-3 text-2xs text-fg-subtle">
-                      <span className="tnum">{k.docs.length} 文档</span>
+                      <span className="tnum">
+                        {Array.isArray(k.docs) ? `${kDocs.length} 文档` : "文档未加载"}
+                      </span>
                       <span className="tnum">{chunks} 分块</span>
                     </div>
                   </div>
@@ -123,12 +131,16 @@ export default function Knowledge() {
           <Card>
             <CardHeader
               title={kb.name}
-              subtitle={`${kb.docs.length} 个文档 · ${totalChunks} 个分块`}
+              subtitle={
+                docsLoaded
+                  ? `${docs.length} 个文档 · ${totalChunks} 个分块`
+                  : "文档明细未随列表下发，需按详情接口加载"
+              }
               action={<Badge tone="mint">已索引</Badge>}
             />
 
             <div className="space-y-1.5">
-              {kb.docs.map((d) => (
+              {kb.docs?.map((d) => (
                 <div
                   key={d.id}
                   className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-line-strong"

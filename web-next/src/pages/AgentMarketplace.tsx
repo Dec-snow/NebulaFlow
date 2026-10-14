@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Bot, Check, Download, Search, Store } from "lucide-react";
 import {
   Badge,
@@ -41,6 +41,9 @@ function MarketplaceAgentCard({
   installed: boolean;
   onInstall: (id: number, name: string) => void;
 }) {
+  // 后端未配置能力时该字段可能缺失，直接 .slice/.length 会抛 TypeError
+  const capabilities = agent.capabilities ?? [];
+
   return (
     <Card hover className="flex h-full flex-col">
       <div className="mb-3 flex items-start gap-3">
@@ -70,13 +73,13 @@ function MarketplaceAgentCard({
 
       {/* 能力标签 */}
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {agent.capabilities.slice(0, 4).map((cap) => (
+        {capabilities.slice(0, 4).map((cap) => (
           <Badge key={cap} tone="neutral">
             {cap}
           </Badge>
         ))}
-        {agent.capabilities.length > 4 && (
-          <Badge tone="neutral">+{agent.capabilities.length - 4}</Badge>
+        {capabilities.length > 4 && (
+          <Badge tone="neutral">+{capabilities.length - 4}</Badge>
         )}
       </div>
 
@@ -122,11 +125,11 @@ export default function AgentMarketplace() {
     [filter, debouncedQ],
   );
 
-  // 收集所有能力标签
+  // 收集所有能力标签（capabilities 可能缺失/为空，不能直接 .forEach）
   const allCapabilities = useMemo(() => {
     if (!data) return [] as string[];
     const set = new Set<string>();
-    data.items.forEach((a) => a.capabilities.forEach((c) => set.add(c)));
+    data.items.forEach((a) => (a.capabilities ?? []).forEach((c) => set.add(c)));
     return Array.from(set);
   }, [data]);
 
@@ -141,7 +144,7 @@ export default function AgentMarketplace() {
   const filteredItems = useMemo(() => {
     if (!data) return [] as Agent[];
     if (capFilter === "all") return data.items;
-    return data.items.filter((a) => a.capabilities.includes(capFilter));
+    return data.items.filter((a) => (a.capabilities ?? []).includes(capFilter));
   }, [data, capFilter]);
 
   const counts = useMemo(() => {

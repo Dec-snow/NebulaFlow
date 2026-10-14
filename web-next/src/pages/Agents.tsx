@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Bot, Plus, Search, Trash2, Zap } from "lucide-react";
 import {
   Badge,
@@ -34,6 +34,9 @@ const RUNTIME_LABEL: Record<AgentRuntimeType, string> = {
 };
 
 function AgentCard({ agent, onDelete, onTest }: { agent: Agent; onDelete: (id: number) => void; onTest: (id: number) => void }) {
+  // 后端未配置能力时该字段可能缺失，直接 .slice/.length 会抛 TypeError
+  const capabilities = agent.capabilities ?? [];
+
   return (
     <Card hover className="flex h-full flex-col">
       <div className="mb-3 flex items-start gap-3">
@@ -57,13 +60,13 @@ function AgentCard({ agent, onDelete, onTest }: { agent: Agent; onDelete: (id: n
 
       {/* 能力标签 */}
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {agent.capabilities.slice(0, 3).map((cap) => (
+        {capabilities.slice(0, 3).map((cap) => (
           <Badge key={cap} tone="neutral">
             {cap}
           </Badge>
         ))}
-        {agent.capabilities.length > 3 && (
-          <Badge tone="neutral">+{agent.capabilities.length - 3}</Badge>
+        {capabilities.length > 3 && (
+          <Badge tone="neutral">+{capabilities.length - 3}</Badge>
         )}
       </div>
 

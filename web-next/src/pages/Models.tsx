@@ -25,6 +25,9 @@ import { cn } from "@/lib/utils";
 
 function ProviderCard({ p }: { p: Provider }) {
   const isDown = p.status === "disabled";
+  // 列表接口的 models 是 join 出来的，查询失败时后端会下发 null
+  const models = p.models ?? [];
+
   return (
     <Card
       className={cn(
@@ -79,7 +82,7 @@ function ProviderCard({ p }: { p: Provider }) {
           可用模型
         </div>
         <div className="space-y-1.5">
-          {p.models.map((m) => (
+          {models.map((m) => (
             <div
               key={m.name}
               className="flex items-center justify-between rounded-md border border-line bg-surface-2/40 px-2.5 py-1.5"
@@ -90,6 +93,11 @@ function ProviderCard({ p }: { p: Provider }) {
               </span>
             </div>
           ))}
+          {models.length === 0 && (
+            <p className="text-2xs text-fg-subtle">
+              {Array.isArray(p.models) ? "未配置模型" : "模型列表未下发"}
+            </p>
+          )}
         </div>
       </div>
 
