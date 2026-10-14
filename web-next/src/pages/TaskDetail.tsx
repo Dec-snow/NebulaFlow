@@ -30,7 +30,7 @@ import {
 import { api } from "@/api";
 import { useFetch } from "@/hooks";
 import type { TaskNodeRow } from "@/types";
-import { clockOf, cn, fmtDuration, timeAgo } from "@/lib/utils";
+import { clockOf, cn, fmtDuration, numberOrNull, timeAgo } from "@/lib/utils";
 
 const TYPE_ICON: Record<string, LucideIcon> = {
   input: LogIn,
@@ -93,12 +93,16 @@ export default function TaskDetail() {
 
   if (loading || !data) return <PageLoader text="加载任务详情…" />;
 
-  const { task, nodes } = data;
+  const { task, nodes: rawNodes } = data;
+
+  // 节点明细来自接口（后端的 task.nodes 是 `nodes,omitempty`），缺失时按空表渲染；
+  // duration_ms / tokens_in / tokens_out 同样是 omitempty，缺失会污染 reduce/Math.max 的结果
+  const nodes = Array.isArray(rawNodes) ? rawNodes : [];
 
   const events = buildEvents(task.id, nodes);
-  const tokensIn = nodes.reduce((s, n) => s + n.tokensIn, 0);
-  const tokensOut = nodes.reduce((s, n) => s + n.tokensOut, 0);
-  const maxDur = Math.max(...nodes.map((n) => n.durationMs), 1);
+  const tokensIn = nodes.reduce((s, n) => s + (numberOrNull(n.tokensIn) ?? 0), 0);
+  const tokensOut = nodes.reduce((s, n) => s + (numberOrNull(n.tokensOut) ?? 0), 0);
+  const maxDur = Math.max(...nodes.map((n) => numberOrNull(n.durationMs) ?? 0), 1);
 
   const statusTone: Record<string, string> = {
     succeeded: "bg-mint",
@@ -189,8 +193,11 @@ export default function TaskDetail() {
               const Icon = TYPE_ICON[n.type] ?? Sparkles;
               const meta = statusMeta(n.status);
               const isLast = i === nodes.length - 1;
+              const dur = numberOrNull(n.durationMs);
+              const tIn = numberOrNull(n.tokensIn);
+              const tOut = numberOrNull(n.tokensOut);
               return (
-                <div key={n.key} className="flex gap-3">
+                <div key={n.key ?? i} className="flex gap-3">
                   {/* 左侧时间线轨道 */}
                   <div className="flex flex-col items-center pt-1">
                     <span
@@ -212,7 +219,7 @@ export default function TaskDetail() {
                   <div className={cn("min-w-0 flex-1", !isLast && "pb-5")}>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-xs font-medium text-fg">
-                        {n.key}
+                        {n.key ?? "—"}
                       </span>
                       <Badge tone="neutral">
                         <Icon size={10} />
@@ -220,15 +227,14 @@ export default function TaskDetail() {
                       </Badge>
                       <StatusBadge status={n.status} />
                       <span className="tnum ml-auto text-2xs text-fg-subtle">
-                        {n.durationMs > 0 ? fmtDuration(n.durationMs) : "—"}
+                        {dur !== null && dur > 0 ? fmtDuration(dur) : "—"}
                       </span>
                     </div>
 
                     <div className="mt-1.5 flex flex-wrap items-center gap-3 text-2xs text-fg-subtle">
-                      {n.tokensIn > 0 && (
+                      {tIn !== null && tIn > 0 && (
                         <span className="tnum font-mono">
-                          {n.tokensIn.toLocaleString()} →{" "}
-                          {n.tokensOut.toLocaleString()} tok
+                          {tIn.toLocaleString()} → {tOut?.toLocaleString() ?? "—"} tok
                         </span>
                       )}
                       {n.message && (
@@ -237,11 +243,11 @@ export default function TaskDetail() {
                     </div>
 
                     {/* 耗时条 */}
-                    {n.durationMs > 0 && (
+                    {dur !== null && dur > 0 && (
                       <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-2">
                         <div
                           className={cn("h-full rounded-full", statusTone[n.status])}
-                          style={{ width: `${(n.durationMs / maxDur) * 100}%` }}
+                          style={{ width: `${(dur / maxDur) * 100}%` }}
                         />
                       </div>
                     )}

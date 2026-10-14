@@ -22,7 +22,7 @@ import {
 import { api } from "@/api";
 import { useFetch } from "@/hooks";
 import type { KnowledgeBase, RetrievalHit } from "@/types";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn, numberOrNull, timeAgo } from "@/lib/utils";
 
 export default function Knowledge() {
   const [selected, setSelected] = useState(1);
@@ -46,15 +46,18 @@ export default function Knowledge() {
 
   if (basesError) return <ErrorState title="加载知识库失败" description={basesError.message} onRetry={refreshBases} />;
 
-  const kb = bases?.find((k) => k.id === selected) ?? bases?.[0];
+  // 列表接口返回的不一定是数组（空结果可能是 null），先收成数组再 find/index
+  const baseList = Array.isArray(bases) ? bases : [];
+  const kb = baseList.find((k) => k.id === selected) ?? baseList[0];
   if (!kb) return <EmptyState icon={<Database size={19} />} title="暂无知识库" />;
 
   // 知识库列表接口不下发 documents（后端另有 GET /knowledge/bases/:id/documents），
   // 直接 kb.docs.reduce 会在真实接口下抛 TypeError。
-  const docs = kb.docs ?? [];
+  const docs = Array.isArray(kb.docs) ? kb.docs : [];
   const docsLoaded = Array.isArray(kb.docs);
 
-  const totalChunks = docs.reduce((s, d) => s + d.chunks, 0);
+  const totalChunks = docs.reduce((s, d) => s + (numberOrNull(d.chunks) ?? 0), 0);
+  const hitsList = Array.isArray(hits) ? hits : [];
 
   return (
     <div className="space-y-6">
@@ -73,10 +76,10 @@ export default function Knowledge() {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* 左：知识库列表 */}
         <div className="space-y-2.5">
-          {bases?.map((k) => {
+          {baseList.map((k) => {
             const active = k.id === selected;
-            const kDocs = k.docs ?? [];
-            const chunks = kDocs.reduce((s, d) => s + d.chunks, 0);
+            const kDocs = Array.isArray(k.docs) ? k.docs : [];
+            const chunks = kDocs.reduce((s, d) => s + (numberOrNull(d.chunks) ?? 0), 0);
             return (
               <button
                 key={k.id}
@@ -140,7 +143,7 @@ export default function Knowledge() {
             />
 
             <div className="space-y-1.5">
-              {kb.docs?.map((d) => (
+              {docs.map((d) => (
                 <div
                   key={d.id}
                   className="flex items-center gap-3 rounded-lg border border-line bg-surface-2/40 px-3 py-2.5 transition-colors hover:border-line-strong"
@@ -153,7 +156,8 @@ export default function Knowledge() {
                       {d.filename}
                     </div>
                     <div className="mt-0.5 text-2xs text-fg-subtle">
-                      {d.sizeKb} KB · {d.chunks} 分块 · {timeAgo(d.createdAt)}
+                      {numberOrNull(d.sizeKb) ?? "—"} KB · {numberOrNull(d.chunks) ?? "—"} 分块 ·{" "}
+                      {timeAgo(d.createdAt)}
                     </div>
                   </div>
                   <StatusBadge status={d.status} />
@@ -214,7 +218,10 @@ export default function Knowledge() {
                 <PageLoader text="检索中…" size="sm" />
               ) : (
                 <div className="space-y-2.5">
-                  {hits?.map((h, i) => (
+                  {hitsList.map((h, i) => {
+                    // 检索接口的 score 是 omitempty；来源字段后端叫 filename，缺失时不要渲染 undefined
+                    const score = numberOrNull(h.score);
+                    return (
                     <div
                       key={h.id}
                       className="rounded-lg border border-line bg-surface-2/40 p-3.5 transition-colors hover:border-line-strong"
@@ -224,17 +231,17 @@ export default function Knowledge() {
                           {i + 1}
                         </span>
                         <span className="font-mono text-2xs text-fg-subtle">
-                          {h.source}
+                          {h.source ?? "—"}
                         </span>
                         <div className="ml-auto flex items-center gap-2">
                           <Progress
-                            value={h.score}
+                            value={score ?? 0}
                             tone="brand"
                             className="w-16"
                             height={4}
                           />
                           <span className="tnum text-2xs font-medium text-brand">
-                            {h.score.toFixed(2)}
+                            {score?.toFixed(2) ?? "—"}
                           </span>
                         </div>
                       </div>
@@ -242,7 +249,8 @@ export default function Knowledge() {
                         {h.content}
                       </p>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

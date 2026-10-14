@@ -1,5 +1,5 @@
 import { useId, useState, type MouseEvent } from "react";
-import { cn } from "@/lib/utils";
+import { cn, numberOrNull } from "@/lib/utils";
 
 type Tone = "brand" | "mint" | "sky" | "violet" | "amber";
 
@@ -16,6 +16,7 @@ const rgb = (tone: Tone, alpha = 1) =>
 
 /** 把数值序列映射到 SVG 坐标点。 */
 function toPoints(values: number[], w: number, h: number, padY: number) {
+  if (!Array.isArray(values) || values.length === 0) return [];
   const max = Math.max(...values);
   const min = Math.min(...values);
   const span = max - min || 1;
@@ -53,9 +54,13 @@ export function Sparkline({
   const id = useId();
   const W = 100;
   const H = 28;
-  const pts = toPoints(data, W, H, 4);
+  // 趋势数组来自接口，可能整个缺失：空数组时渲染空图，不要 Math.max(...[]) → -Infinity
+  const values = Array.isArray(data) ? data : [];
+  const pts = toPoints(values, W, H, 4);
   const line = smoothPath(pts);
-  const area = `${line} L ${W} ${H} L 0 ${H} Z`;
+  // 空序列时不要拼出 " L 100 28 L 0 28 Z" 这种非法 path：浏览器会记一条
+  // "Expected moveto path command" 控制台错误。没有点时直接不渲染 path。
+  const area = line ? `${line} L ${W} ${H} L 0 ${H} Z` : "";
 
   return (
     <svg
@@ -70,15 +75,17 @@ export function Sparkline({
           <stop offset="100%" stopColor={rgb(tone, 0)} />
         </linearGradient>
       </defs>
-      <path d={area} fill={`url(#sp-${id})`} />
-      <path
-        d={line}
-        fill="none"
-        stroke={rgb(tone)}
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
+      {area && <path d={area} fill={`url(#sp-${id})`} />}
+      {line && (
+        <path
+          d={line}
+          fill="none"
+          stroke={rgb(tone)}
+          strokeWidth={1.75}
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
     </svg>
   );
 }
@@ -103,16 +110,21 @@ export function AreaChart({
   const W = 600;
   const H = 180;
   const padY = 16;
-  const pts = toPoints(data, W, H, padY);
+  // 接口未下发吞吐/成本序列时退化成空图，避免 Math.max(...undefined) 抛错与 "-Infinity" 刻度
+  const values = Array.isArray(data) ? data : [];
+  const labelsList = Array.isArray(labels) ? labels : [];
+  const pts = toPoints(values, W, H, padY);
   const line = smoothPath(pts);
-  const area = `${line} L ${W} ${H} L 0 ${H} Z`;
-  const max = Math.max(...data);
+  // 同 Sparkline：空序列不渲染非法 path（否则浏览器控制台会出现 path 解析错误）
+  const area = line ? `${line} L ${W} ${H} L 0 ${H} Z` : "";
+  const max = values.length > 0 ? Math.max(...values) : null;
 
   const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    if (values.length === 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / rect.width;
-    const i = Math.round(ratio * (data.length - 1));
-    setHover(Math.max(0, Math.min(data.length - 1, i)));
+    const i = Math.round(ratio * (values.length - 1));
+    setHover(Math.max(0, Math.min(values.length - 1, i)));
   };
 
   const hp = hover != null ? pts[hover] : null;
@@ -150,15 +162,17 @@ export function AreaChart({
           />
         ))}
 
-        <path d={area} fill={`url(#ar-${id})`} />
-        <path
-          d={line}
-          fill="none"
-          stroke={rgb(tone)}
-          strokeWidth={2}
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
+        {area && <path d={area} fill={`url(#ar-${id})`} />}
+        {line && (
+          <path
+            d={line}
+            fill="none"
+            stroke={rgb(tone)}
+            strokeWidth={2}
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
 
         {/* 悬停竖向指示线 */}
         {hp && (
@@ -197,21 +211,21 @@ export function AreaChart({
             marginTop: -10,
           }}
         >
-          <div className="tnum text-sm font-semibold text-fg">{data[hover]}</div>
-          {labels?.[hover] && (
-            <div className="text-2xs text-fg-subtle">{labels[hover]}</div>
+          <div className="tnum text-sm font-semibold text-fg">{values[hover]}</div>
+          {labelsList[hover] && (
+            <div className="text-2xs text-fg-subtle">{labelsList[hover]}</div>
           )}
         </div>
       )}
 
       {/* 顶部刻度 + 底部标签 */}
       <div className="pointer-events-none absolute right-0 top-0 text-2xs text-fg-subtle tnum">
-        {max}
+        {max ?? "—"}
       </div>
-      {labels && (
+      {labelsList.length > 0 && (
         <div className="mt-2 flex justify-between text-2xs text-fg-subtle">
-          <span>{labels[0]}</span>
-          <span>{labels[labels.length - 1]}</span>
+          <span>{labelsList[0]}</span>
+          <span>{labelsList[labelsList.length - 1]}</span>
         </div>
       )}
     </div>
@@ -237,7 +251,8 @@ export function RingProgress({
 }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
-  const clamped = Math.max(0, Math.min(1, value));
+  // utilization 缺失时兜底为 0，否则 clamped 变 NaN、label 渲染成 "NaN%"
+  const clamped = Math.max(0, Math.min(1, numberOrNull(value) ?? 0));
 
   return (
     <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
@@ -281,23 +296,25 @@ export function BarSeries({
   items: { label: string; value: number; tone?: Tone }[];
   className?: string;
 }) {
-  const max = Math.max(...items.map((i) => i.value), 1);
+  // items 来自接口（token 分布 / 成本分布），可能缺失或数值字段为空
+  const list = Array.isArray(items) ? items : [];
+  const max = Math.max(...list.map((i) => numberOrNull(i.value) ?? 0), 1);
   return (
     <div className={cn("space-y-3", className)}>
-      {items.map((it) => (
+      {list.map((it) => (
         <div key={it.label} className="flex items-center gap-3">
           <span className="w-24 shrink-0 truncate text-xs text-fg-muted">{it.label}</span>
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-2">
             <div
               className="h-full rounded-full transition-[width] duration-700 ease-smooth"
               style={{
-                width: `${(it.value / max) * 100}%`,
+                width: `${((numberOrNull(it.value) ?? 0) / max) * 100}%`,
                 background: rgb(it.tone ?? "brand"),
               }}
             />
           </div>
           <span className="tnum w-14 shrink-0 text-right text-xs text-fg">
-            {it.value?.toLocaleString() ?? "—"}
+            {numberOrNull(it.value)?.toLocaleString() ?? "—"}
           </span>
         </div>
       ))}

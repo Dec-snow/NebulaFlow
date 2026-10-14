@@ -54,7 +54,10 @@ function MiniDag({ wf }: { wf: WorkflowSummary }) {
     <div className="dot-grid rounded-lg border border-line bg-surface-2/50">
       <svg viewBox="0 0 100 60" className="h-[104px] w-full" aria-hidden>
         {/* 连线 */}
-        {miniEdges.map(([a, b], i) => {
+        {miniEdges.map((edge, i) => {
+          // 边的形状由接口决定：不是二元组时跳过，避免解构抛 TypeError
+          if (!Array.isArray(edge)) return null;
+          const [a, b] = edge;
           const p = pos.get(a);
           const q = pos.get(b);
           if (!p || !q) return null;
@@ -173,11 +176,12 @@ export default function Workflows() {
     [filter, debouncedQ],
   );
 
-  const list = data?.items ?? [];
-  const total = data?.total ?? 0;
+  // 列表接口不一定下发 items / total（分页字段缺失时后端可能只回数组本身）
+  const list = Array.isArray(data?.items) ? data.items : [];
+  const total = numberOrNull(data?.total) ?? 0;
 
   // 计算各状态数量（用全量数据近似，实际应由后端返回）
-  const allList = data?.items ?? [];
+  const allList = list;
   const counts = {
     all: total,
     published: allList.filter((w) => w.status === "published").length,

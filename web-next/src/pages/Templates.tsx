@@ -110,27 +110,29 @@ export default function Templates() {
 
   const { data: categories } = useFetch(() => api.templates.categories(), []);
 
+  // 分类统计接口可能不下发数组，直接 .forEach 会抛 TypeError
+  const categoryList = Array.isArray(categories) ? categories : [];
+
   const counts = useMemo(() => {
-    if (!categories) return { all: 0 };
     const map: Record<string, number> = {};
-    categories.forEach((c) => {
+    categoryList.forEach((c) => {
+      const count = numberOrNull(c.count) ?? 0;
       if (c.name === "全部") {
-        map.all = c.count;
+        map.all = count;
       } else {
-        map[c.name] = c.count;
+        map[c.name] = count;
       }
     });
     return map;
-  }, [categories]);
+  }, [categoryList]);
 
   const segmentedOptions = useMemo(() => {
-    if (!categories) return [];
-    return categories.map((c) => ({
+    return categoryList.map((c) => ({
       value: c.name === "全部" ? "all" : c.name,
       label: c.name,
-      count: c.count,
+      count: numberOrNull(c.count) ?? 0,
     }));
-  }, [categories]);
+  }, [categoryList]);
 
   const handleUse = async (id: number, name: string) => {
     const res = await api.templates.use(id);
@@ -149,7 +151,7 @@ export default function Templates() {
     return <ErrorState title="加载模板市场失败" description={error.message} onRetry={refresh} />;
   }
 
-  const list = data?.items ?? [];
+  const list = Array.isArray(data?.items) ? data.items : [];
 
   return (
     <div className="space-y-6">

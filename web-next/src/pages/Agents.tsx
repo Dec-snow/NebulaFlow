@@ -16,7 +16,7 @@ import {
 } from "@/components/ui";
 import { api } from "@/api";
 import { useDebounce, useFetch } from "@/hooks";
-import { cn } from "@/lib/utils";
+import { cn, numberOrNull } from "@/lib/utils";
 import type { Agent, AgentRuntimeType } from "@/types";
 
 type RuntimeFilter = "all" | AgentRuntimeType;
@@ -35,7 +35,7 @@ const RUNTIME_LABEL: Record<AgentRuntimeType, string> = {
 
 function AgentCard({ agent, onDelete, onTest }: { agent: Agent; onDelete: (id: number) => void; onTest: (id: number) => void }) {
   // 后端未配置能力时该字段可能缺失，直接 .slice/.length 会抛 TypeError
-  const capabilities = agent.capabilities ?? [];
+  const capabilities = Array.isArray(agent.capabilities) ? agent.capabilities : [];
 
   return (
     <Card hover className="flex h-full flex-col">
@@ -122,11 +122,13 @@ export default function Agents() {
 
   const counts = useMemo(() => {
     if (!data) return { all: 0, native: 0, langchain: 0, http: 0 };
+    // items / total 可能缺失：直接 .filter 会抛 TypeError
+    const items = Array.isArray(data.items) ? data.items : [];
     return {
-      all: data.total,
-      native: data.items.filter((a) => a.runtimeType === "native").length,
-      langchain: data.items.filter((a) => a.runtimeType === "langchain").length,
-      http: data.items.filter((a) => a.runtimeType === "http").length,
+      all: numberOrNull(data.total) ?? 0,
+      native: items.filter((a) => a.runtimeType === "native").length,
+      langchain: items.filter((a) => a.runtimeType === "langchain").length,
+      http: items.filter((a) => a.runtimeType === "http").length,
     };
   }, [data]);
 
@@ -161,7 +163,7 @@ export default function Agents() {
     return <ErrorState title="加载 Agent 列表失败" description={error.message} onRetry={refresh} />;
   }
 
-  const list = data?.items ?? [];
+  const list = Array.isArray(data?.items) ? data.items : [];
 
   return (
     <div className="space-y-6">

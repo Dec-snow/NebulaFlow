@@ -21,12 +21,15 @@ import {
 import { api } from "@/api";
 import { useFetch } from "@/hooks";
 import type { Provider } from "@/types";
-import { cn } from "@/lib/utils";
+import { cn, numberOrNull } from "@/lib/utils";
 
 function ProviderCard({ p }: { p: Provider }) {
   const isDown = p.status === "disabled";
   // 列表接口的 models 是 join 出来的，查询失败时后端会下发 null
-  const models = p.models ?? [];
+  const models = Array.isArray(p.models) ? p.models : [];
+  // 后端 LLMProvider 没有 latency_ms / status，这两个都是"期望字段"，缺失时给占位符
+  const latency = numberOrNull(p.latencyMs);
+  const priority = numberOrNull(p.priority);
 
   return (
     <Card
@@ -66,11 +69,11 @@ function ProviderCard({ p }: { p: Provider }) {
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <StatusBadge status={p.status} />
-        <Badge tone="neutral">优先级 {p.priority}</Badge>
+        <Badge tone="neutral">优先级 {priority ?? "—"}</Badge>
         {!isDown && (
-          <Badge tone={p.latencyMs > 1500 ? "amber" : "mint"}>
+          <Badge tone={latency !== null && latency > 1500 ? "amber" : "mint"}>
             <Gauge size={10} />
-            {p.latencyMs}ms
+            {latency !== null ? `${latency}ms` : "—"}
           </Badge>
         )}
       </div>
@@ -89,7 +92,7 @@ function ProviderCard({ p }: { p: Provider }) {
             >
               <span className="truncate font-mono text-2xs text-fg">{m.name}</span>
               <span className="tnum shrink-0 text-2xs text-fg-subtle">
-                {m.maxTokens.toLocaleString()} tok
+                {numberOrNull(m.maxTokens)?.toLocaleString() ?? "—"} tok
               </span>
             </div>
           ))}
@@ -120,7 +123,8 @@ export default function Models() {
 
   if (error) return <ErrorState title="加载模型与供应商失败" description={error.message} onRetry={refresh} />;
 
-  const enabled = (providers ?? []).filter((p) => p.status !== "disabled");
+  const providerList = Array.isArray(providers) ? providers : [];
+  const enabled = providerList.filter((p) => p.status !== "disabled");
 
   return (
     <div className="space-y-6">
@@ -168,7 +172,9 @@ export default function Models() {
                   )}
                 />
                 <span className="text-xs font-medium text-fg">{p.name}</span>
-                <span className="tnum text-2xs text-fg-subtle">{p.latencyMs}ms</span>
+                <span className="tnum text-2xs text-fg-subtle">
+                  {numberOrNull(p.latencyMs) !== null ? `${p.latencyMs}ms` : "—"}
+                </span>
               </div>
               {i < enabled.length - 1 && (
                 <ArrowRight size={13} className="shrink-0 text-fg-subtle" />
@@ -189,7 +195,7 @@ export default function Models() {
 
       {/* Provider 卡片 */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {providers?.map((p) => (
+        {providerList.map((p) => (
           <ProviderCard key={p.id} p={p} />
         ))}
       </div>

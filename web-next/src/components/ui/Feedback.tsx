@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { CheckCircle2, Info, XCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, numberOrNull } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ 空状态 */
 export function EmptyState({
@@ -53,7 +53,8 @@ export function Progress({
   className?: string;
   height?: number;
 }) {
-  const clamped = Math.max(0, Math.min(1, value));
+  // 相似度（score）是 omitempty 字段：缺失时按 0 渲染，避免 NaN% 宽度与 aria 值
+  const clamped = Math.max(0, Math.min(1, numberOrNull(value) ?? 0));
   const map: Record<string, string> = {
     brand: "bg-brand",
     mint: "bg-mint",

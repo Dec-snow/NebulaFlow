@@ -50,12 +50,19 @@ export function compact(n: number): string {
   return (n / 1_000_000).toFixed(1) + "M";
 }
 
-/** 毫秒 → 人类可读（842ms / 1.2s / 2m18s）。 */
-export function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
+/**
+ * 毫秒 → 人类可读（842ms / 1.2s / 2m18s）。
+ *
+ * 后端 `duration_ms` 带 `omitempty`，耗时字段可能整个缺失（老数据、节点未跑完），
+ * 直接参与运算会得到 "NaNmNaNs"。非有限值统一降级为占位符。
+ */
+export function fmtDuration(ms: unknown): string {
+  const n = numberOrNull(ms);
+  if (n === null) return "—";
+  if (n < 1000) return `${Math.round(n)}ms`;
+  if (n < 60_000) return `${(n / 1000).toFixed(n < 10_000 ? 2 : 1)}s`;
+  const m = Math.floor(n / 60_000);
+  const s = Math.round((n % 60_000) / 1000);
   return `${m}m${String(s).padStart(2, "0")}s`;
 }
 
@@ -73,9 +80,16 @@ export function timeAgo(iso: string | null | undefined): string {
   return `${Math.floor(h / 24)} 天前`;
 }
 
-/** 时钟格式 HH:MM:SS，用于日志与事件流。 */
-export function clockOf(iso: string): string {
+/**
+ * 时钟格式 HH:MM:SS，用于日志与事件流。
+ *
+ * 时间戳缺失（`started_at` 也是 omitempty 的指针字段）时会得到 Invalid Date，
+ * 原样格式化会渲染出 "NaN:NaN:NaN"，所以这里与 timeAgo 保持一致：降级为占位符。
+ */
+export function clockOf(iso: string | null | undefined): string {
+  if (!iso) return "—";
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
   return [d.getHours(), d.getMinutes(), d.getSeconds()]
     .map((x) => String(x).padStart(2, "0"))
     .join(":");
