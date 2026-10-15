@@ -429,6 +429,54 @@ docker compose exec app nebulaflow-seed   # 或：go run ./cmd/seed
 # 幂等：重复执行会复用已有用户 / Provider / 知识库 / 工作流，并自愈 RAG 绑定与向量维度
 ```
 
+### 生产部署（nebula.hoarfrost.cloud）
+
+线上不是"只有静态前端"，而是三层：nginx 托管版本化前端目录 + `127.0.0.1:18080` 上
+systemd 常驻的 Go 进程 + Docker 里的 PostgreSQL(pgvector) / Redis。
+全部由 `push` 到 `main` 触发的 `.github/workflows/ci.yml` 自动完成，人工不需要登服务器。
+
+| 文件 | 作用 |
+|---|---|
+| `deploy/docker-compose.server.yml` | 服务器专用编排：只跑 `pgvector/pgvector:pg16` + `redis:7-alpine`，命名卷持久化，端口绑 `127.0.0.1:15432` / `127.0.0.1:16379` |
+| `deploy/nebulaflow.service` | 后端 systemd 单元（`EnvironmentFile=/opt/nebulaflow/.env`，`Restart=always`） |
+| `deploy/server-setup.sh` | 幂等的服务器端安装/升级脚本（见下） |
+| `deploy/nebula.conf` | nginx：静态站 + `location ^~ /api/` 与 `location = /healthz` 反代（含 SSE 必需的 `proxy_buffering off` 等三行） |
+
+服务器上的落点：
+
+```text
+/opt/nebulaflow/bin/nebulaflow-server   # CI 交叉编译的 linux/amd64 静态二进制
+/opt/nebulaflow/bin/nebulaflow-seed
+/opt/nebulaflow/.env                    # 0600 root:root，JWT_SECRET/ENCRYPTION_KEY/POSTGRES_PASSWORD 只生成一次
+/opt/nebulaflow/docker-compose.server.yml
+/etc/systemd/system/nebulaflow.service
+/var/www/nebula/current -> releases/<ts>   # 前端，保留最近 5 个版本
+```
+
+部署顺序（**顺序本身就是设计**，避免"前端要真实 API、后端还没起"的空窗）：
+
+1. `docker compose up -d` 起 PG/Redis，等到两个容器都 `healthy`；
+2. 装二进制 + systemd 单元，重启后端，等 `http://127.0.0.1:18080/healthz` 返回 200；
+3. 换 nginx 配置并 `nginx -t && nginx -s reload`，再从**公网入口**断言
+   `/healthz` 是 200、`/api/workflows`（无 token）是 **401 且 `content-type: application/json`**；
+4. 以上全过才解压新前端、原子切软链，最后复验首页。
+
+任何一步失败即中断，线上停留在上一版可用状态。
+
+> ⚠ 两个与直觉不符但必须知道的事实：
+> - **`PORT` 是 18080 而不是 8080**：这台服务器上 nginx 自己的 blog vhost 占用了
+>   `0.0.0.0:8080`（`0.0.0.0` 覆盖回环，后端连 `127.0.0.1:8080` 也会 `EADDRINUSE`）。
+> - **那台机器连不上 Docker Hub**：`deploy/server-setup.sh` 在直接 `docker pull` 失败后会
+>   依次尝试镜像代理（`docker.1panel.live` 等）并重新打上官方 tag；
+>   `docker compose` 插件也缺失，脚本会用 apt 安装 `docker-compose-v2`。
+
+密钥只在 `/opt/nebulaflow/.env` **不存在**时生成：覆盖 `ENCRYPTION_KEY` 会让库里所有
+已加密的 provider api key 失效（服务会 fail-closed 拒绝启动），覆盖 `JWT_SECRET`
+会让所有已签发 token 失效，覆盖 `POSTGRES_PASSWORD` 会连不上已有数据卷。
+
+回滚：`systemctl stop nebulaflow` + 恢复 `/etc/nginx/conf.d/nebula.conf`
+（前端回滚 = 把 `/var/www/nebula/current` 指回上一个 `releases/<ts>`）。
+
 ### 本地开发
 
 ```bash

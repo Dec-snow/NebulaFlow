@@ -1,0 +1,84 @@
+# NebulaFlow —— **服务器专用**编排：只跑基础设施（PostgreSQL + Redis），不跑应用。
+#
+# 为什么不直接复用仓库根的 docker-compose.yml：
+#   1. 那份会 build app 镜像 —— 服务器上既没有镜像仓库、也没有 gcc，
+#      而后端在本方案里是 systemd 常驻的**宿主机二进制**（见 deploy/nebulaflow.service
+#      与 deploy/server-setup.sh），不需要每次部署都重新 build 镜像；
+#   2. 那份把 5432/6379 绑到 0.0.0.0 —— 数据库与缓存不该出现在公网上；
+#   3. 那份带 prometheus + grafana —— 那是本地压测观测用的，生产的小机器扛不住。
+#
+# 端口刻意用非默认值并绑回环：
+#   127.0.0.1:15432 -> 5432
+#   127.0.0.1:16379 -> 6379
+# 宿主机（阿里云 Ubuntu 24.04）上已有其它服务，用默认端口迟早撞上；
+# 绑 127.0.0.1 则保证只有本机的 Go 进程能连，公网无法直达。
+#
+# 数据用**命名卷**而不是 bind mount：命名卷由 docker 管理生命周期，
+# 不会踩到 PostgreSQL 镜像要求的宿主目录权限（容器内 UID 999 需要 0700 的 PGDATA）。
+#
+# 用法（在 /opt/nebulaflow 下，.env 里提供 POSTGRES_PASSWORD）：
+#   docker compose -f docker-compose.server.yml up -d
+#   docker compose -f docker-compose.server.yml ps
+name: nebulaflow
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    # 必填而不是给默认值：悄悄用一个空密码起库，等于把一个无认证的数据库
+    # 留在回环上；宁可 compose 直接报错。
+    environment:
+      POSTGRES_USER: nebula
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须在 /opt/nebulaflow/.env 中设置}
+      POSTGRES_DB: nebulaflow
+      # 中文全文检索/排序用不到，省掉一次 initdb 的 locale 烦恼
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - nebulaflow_pg_data:/var/lib/postgresql/data
+    # 小机器（1.6G 内存）上给并行查询留出共享内存：
+    # docker 默认 /dev/shm 只有 64M，PG 的 parallel worker 会直接报错。
+    shm_size: 256m
+    # 默认值（shared_buffers=128MB / max_connections=100）对这台小机器偏大：
+    # 应用侧 DB_MAX_CONNS 只需要十几条连接，把上限压到 60 留出余量，
+    # sort_mem/work_mem 保持保守，避免单个大查询把内存打满。
+    command:
+      - postgres
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - max_connections=60
+      - -c
+      - work_mem=8MB
+      # 容器日志落到 json-file driver，默认不轮转；打开慢查询日志便于事后归因
+      - -c
+      - log_min_duration_statement=1000
+    healthcheck:
+      # -U/-d 必须显式给：默认会拿容器内 root 去连，报 "role root does not exist"
+      test: ["CMD-SHELL", "pg_isready -U nebula -d nebulaflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # appendonly yes：任务队列是 Redis Stream，AOF 是"重启不丢在途任务"的底线。
+    # 没有它，宕机后 PEL 里的任务要靠业务侧的恢复逻辑兜，代价大得多。
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "192mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    volumes:
+      - nebulaflow_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  nebulaflow_pg_data:
+  nebulaflow_redis_data:

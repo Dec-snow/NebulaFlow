@@ -1,0 +1,69 @@
+# NebulaFlow API —— systemd 单元
+#
+# 安装位置：/etc/systemd/system/nebulaflow.service
+# 安装方式：deploy/server-setup.sh（幂等：先 daemon-reload 再 enable --now / restart）
+#
+# 为什么不把后端也塞进容器：
+#   1. 服务器上没有镜像仓库，Docker Hub 也连不通（实测 registry-1.docker.io 连接被拒），
+#      走镜像就得每次部署都往服务器传一个几百 MB 的层；
+#   2. CI 里 CGO_ENABLED=0 交叉编译出来的单个静态二进制只有 ~38MB，
+#      scp 上去换个文件即可，回滚就是换回上一个文件；
+#   3. 日志直接进 journald，journalctl -u nebulaflow 就能看，不用再套一层 docker logs。
+# 代价是依赖管理和启动顺序要自己写清楚 —— 就是下面这些 After/Wants。
+#
+# 环境变量来自 /opt/nebulaflow/.env（0600，只 root 可读；由 server-setup.sh 生成，
+# 其中 JWT_SECRET / ENCRYPTION_KEY / POSTGRES_PASSWORD 只在文件不存在时生成一次，
+# 之后绝不覆盖 —— 覆盖 ENCRYPTION_KEY 会让库里所有已加密的 provider api key 失效）。
+
+[Unit]
+Description=NebulaFlow API server (Go, PostgreSQL + Redis)
+Documentation=https://github.com/Dec-snow/NebulaFlow
+# network-online 保证启动时 DNS/路由就绪（服务启动会连 PG/Redis）
+Wants=network-online.target
+After=network-online.target
+# 用 Wants 而不是 Requires：重载 docker 不应该顺带把 API 拉下来。
+# After 只用于**开机时**的先后（先起 docker，再由 docker 拉起 PG/Redis 容器）；
+# 应用侧靠 Restart=always 兜住"PG 还没就绪"的窗口。
+Wants=docker.service
+After=docker.service
+# 开机时 PG 容器可能要十几秒才 accept 连接，而进程在这个窗口里会立刻退出。
+# 默认的启动限流（5 次/10 秒）会让 systemd 放弃拉起并留下 failed 状态 ——
+# 在无人值守的服务器上那就是"部署完了但服务没起来"。置 0 关掉限流。
+# ⚠ 这个键属于 [Unit] 而不是 [Service]：写在 [Service] 里 systemd 只报一句
+# "Unknown key name" 然后忽略，重启风暴照样会被限流（systemd-analyze verify 能发现）。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nebulaflow
+EnvironmentFile=/opt/nebulaflow/.env
+ExecStart=/opt/nebulaflow/bin/nebulaflow-server
+# 刻意不提供 ExecReload：进程只监听了 SIGINT/SIGTERM（见 cmd/server 的
+# signal.NotifyContext），SIGHUP 会按默认动作直接终止进程。
+# "热重载"在这里就是 `systemctl restart nebulaflow`，别让运维以为有别的语义。
+
+Restart=always
+RestartSec=5
+
+# 优雅关闭：main 里 httpSrv.Shutdown 给在途请求 15s、worker pool 10s，
+# 所以停止超时必须大于两者之和，否则 SIGKILL 会打断正在收尾的任务。
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=45
+
+# 连 PG 用不着开文件句柄，但 WORKER_COUNT 高时 goroutine 会各自持连接
+LimitNOFILE=65535
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nebulaflow
+
+# 一点基本加固：进程只需要写 /tmp 和网络。
+# 刻意不加 ProtectSystem/PrivateTmp 之外的强隔离，因为这个二进制
+# 需要读 /opt/nebulaflow/.env 并作为 root 运行（沿用服务器现有部署方式）。
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
