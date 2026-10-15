@@ -1,5 +1,13 @@
 # NebulaFlow CI/CD —— push/PR 触发
-# 流水线：Lint → Unit Test → Frontend Build → Deploy (tar.gz over SSH)
+# 流水线：Lint → Unit Test → PG 集成 → 前端构建 → 后端交叉编译 → Deploy
+#
+# 部署形态（2026-10 起）：nebula.hoarfrost.cloud 不再是纯静态站，
+# 而是「nginx 静态前端 + 127.0.0.1:18080 上的 Go 后端 + Docker 里的 PG/Redis」。
+# 服务器侧的全部细节在：
+#   deploy/docker-compose.server.yml  （只跑 pgvector + redis，命名卷，绑回环非默认端口）
+#   deploy/nebulaflow.service         （后端以 systemd 常驻，环境变量读 /opt/nebulaflow/.env）
+#   deploy/server-setup.sh            （幂等安装/升级：基础设施 → 二进制 → 配置 → 服务 → /healthz）
+#   deploy/nebula.conf                （nginx：静态站 + /api/ 与 /healthz 反代）
 name: ci
 
 on:
@@ -72,6 +80,27 @@ jobs:
         run: |
           go test ./internal/database/... -run 'BrandNewDatabase' -v -count=1
 
+      # 后端二进制在这里就交叉编译好，随制品一起交给 deploy job。
+      # 为什么不用镜像：服务器上没有镜像仓库，Docker Hub 在那台机器上也不可达
+      # （实测 registry-1.docker.io 连接被拒），走镜像就意味着每次部署都要
+      # 传一个几百 MB 的层过去。静态二进制只有 ~38MB，scp 一个文件就够了。
+      # CGO_ENABLED=0：目标机器不需要 gcc，本仓库的依赖（pgx / bcrypt / gin）
+      # 全是纯 Go，交叉编译不用装工具链。
+      - name: Build backend binaries (linux/amd64)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p bin
+          go build -trimpath -ldflags "-s -w" -o bin/nebulaflow-server ./cmd/server
+          go build -trimpath -ldflags "-s -w" -o bin/nebulaflow-seed ./cmd/seed
+          ls -l bin
+          file bin/nebulaflow-server bin/nebulaflow-seed
+
+      - name: Package backend
+        run: tar -czf backend.tar.gz -C bin nebulaflow-server nebulaflow-seed
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -79,31 +108,49 @@ jobs:
           cache: npm
           cache-dependency-path: web-next/package-lock.json
 
+      # ⚠ 这里**不要**再设 VITE_USE_MOCK=true。
+      #
+      # 2026-10 之前线上是纯静态站（没有 /api 反代、没有后端），为了让演示站
+      # 不至于是一片空白，前端一度以 mock 模式构建。现在后端已经在服务器上
+      # 常驻（systemd + PG/Redis 容器），deploy/nebula.conf 也加了 /api/ 反代，
+      # 所以按 web-next/src/api/config.ts 的默认行为构建 —— 不设这个变量
+      # 就是「走真实 API」，mock 必须显式打开。
+      #
+      # 顺序上的保护在 deploy job：后端 /healthz 与公网 /api/workflows 都验过之后，
+      # 才会把这份前端切上去，所以不会出现「前端要 API、后端还没起」的空窗。
       - name: Frontend build
         working-directory: web-next
-        # 部署目标（nebula.hoarfrost.cloud）是**纯静态展示站**：那台服务器上没有 Go 后端，
-        # 且 deploy/nebula.conf 只做静态托管（没有 /api 反代 —— 实测 /api/* 会回落到 index.html、
-        # POST /api/auth/login 返回 nginx 405）。所以线上刻意以 mock 模式构建，保证演示站始终可浏览。
-        #
-        # 想让线上跑真实 API，先满足两件事（详见 PR #2 的“部署注意”）：
-        #   1. 在服务器上跑后端（docker compose 的 app 服务，或直接跑二进制，默认 :8080）；
-        #   2. 给 deploy/nebula.conf 加 location /api/ 反代，可直接抄 web-next/nginx.conf，
-        #      注意其中 SSE 的三行：proxy_http_version 1.1 / proxy_set_header Connection "" / proxy_buffering off。
-        # 两者就绪后，把下面的 VITE_USE_MOCK 删掉即可切回真实 API。
-        env:
-          VITE_USE_MOCK: "true"
         run: |
           npm ci
           npm run build
 
+      # 部署前就断言产物是"真 API"版本：一旦有人手滑把 mock 打开，
+      # 线上就会变成一个看着正常、实际全是假数据的站 —— 这种问题在浏览器里
+      # 几乎看不出来，必须在流水线里拦。打包前检查，失败即整条流水线失败。
+      - name: Assert frontend bundle targets the real API
+        working-directory: web-next
+        run: |
+          set -eu
+          if ! grep -rq '/api/auth/login' dist/assets; then
+            echo "FAIL: dist/assets 里找不到 /api/auth/login —— 前端没有走真实 API"
+            exit 1
+          fi
+          if grep -rq '技术分析工作流' dist/assets; then
+            echo "FAIL: dist/assets 里出现了 mock 数据标识（技术分析工作流）—— 前端被打成了 mock 版本"
+            exit 1
+          fi
+          echo "ok: bundle 命中真实 API，且不含 mock 标识"
+
       - name: Package frontend
         run: tar -czf frontend.tar.gz -C web-next/dist .
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: frontend
-          path: frontend.tar.gz
+          name: nebulaflow-bundle
+          path: |
+            frontend.tar.gz
+            backend.tar.gz
           retention-days: 7
 
   deploy:
@@ -114,63 +161,139 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download frontend artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: frontend
+          name: nebulaflow-bundle
 
-      - name: Copy to server
+      # 前端包落在 /tmp/frontend.tar.gz：它只是"先放到服务器上"，
+      # 真正切换软链在最后一步（后端验完才切）。
+      - name: Copy artifacts to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          source: frontend.tar.gz
+          source: "frontend.tar.gz,backend.tar.gz"
           target: /tmp
 
-      - name: Copy nginx config to server
+      # 服务器侧文件统一放 /tmp/nebula-deploy（strip_components 去掉 deploy/ 前缀，
+      # 于是 server-setup.sh 里读的是 $STAGING_DIR/nebula.conf 这样的扁平路径）。
+      - name: Copy deploy files to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
-          source: deploy/nebula.conf
-          target: /tmp
+          source: "deploy/nebula.conf,deploy/nebulaflow.service,deploy/docker-compose.server.yml,deploy/server-setup.sh"
+          target: /tmp/nebula-deploy
           strip_components: 1
 
-      - name: Deploy over SSH (versioned release + symlink)
+      # 部署顺序是这个 job 的重点，改动前先想清楚"失败时线上处于什么状态"：
+      #
+      #   a. 起/更新 PG+Redis（幂等，等 healthy）
+      #   b. 装/更新二进制与 systemd 服务，重启后端，等 /healthz 200
+      #   c. 换 nginx 配置并 reload，再从**公网入口**确认 /healthz 200 且
+      #      /api/workflows 返回 401 JSON（不是 200 的 index.html）
+      #   d. 以上都过了才解压并切换前端（版本化目录 + 原子软链）
+      #   e. 最后再验一次首页
+      #
+      # a/b 由 deploy/server-setup.sh 负责（它自己会在任何一步失败时非零退出），
+      # 这里是编排 + 那几道"只有从公网看才算数"的断言。
+      # set -e 保证任何一步失败都不会走到切换前端那一步：线上最差情况是
+      # "后端更新了但前端还是上一版"，而不是"前端要 API、后端还没起"。
+      - name: Deploy backend first, then frontend
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
+          command_timeout: 20m
           script: |
             set -euo pipefail
 
-            RELEASES_DIR="/var/www/nebula/releases"
-            CURRENT_LINK="/var/www/nebula/current"
+            API_PORT=18080
+            STAGING=/tmp/nebula-deploy
+            BASE_URL=https://nebula.hoarfrost.cloud
+            RELEASES_DIR=/var/www/nebula/releases
+            CURRENT_LINK=/var/www/nebula/current
+
+            fail() { echo "DEPLOY FAILED: $*" >&2; exit 1; }
+
+            # ---- 0. 权限 ----------------------------------------------------
+            # CI 的 DEPLOY_USER 目前是 root；不假设，非 root 时用 sudo -n 兜底，
+            # 并把实际用的身份打进日志（排查权限问题时第一眼要看的就是这行）。
+            if [ "$(id -u)" -eq 0 ]; then
+              SUDO=""
+              echo "[deploy] user=$(id -un) uid=0 (root, no sudo needed)"
+            else
+              sudo -n true 2>/dev/null || fail "用户 $(id -un) 不是 root 且无法免密 sudo：请把 DEPLOY_USER 设为 root"
+              SUDO="sudo -n"
+              echo "[deploy] user=$(id -un) uid=$(id -u) -> using 'sudo -n'"
+            fi
+
+            [ -d "$STAGING" ] || fail "缺少 $STAGING（scp 步骤失败？）"
+
+            # ---- a + b. 基础设施 → 后端 → /healthz 200 ----------------------
+            # server-setup.sh 是幂等的：重复执行不会重置 .env 里的密钥、
+            # 不会重建数据卷、已经 healthy 的容器不会重启。
+            echo "[deploy] === 1/4 infrastructure + backend ==="
+            $SUDO bash "$STAGING/server-setup.sh"
+
+            # ---- c. nginx 反代（后端已确认 200，此时 reload 不会打出 502 窗口） ----
+            echo "[deploy] === 2/4 nginx reverse proxy ==="
+            $SUDO install -m 0644 "$STAGING/nebula.conf" /etc/nginx/conf.d/nebula.conf
+            $SUDO nginx -t
+            $SUDO nginx -s reload
+            echo "[deploy] nginx reloaded"
+
+            # 公网入口断言。为什么必须经公网而不是只看 127.0.0.1:18080：
+            # 后端能起不代表 nginx 的反代对了（location 写错、reload 没生效、
+            # 别处的 vhost 抢了 server_name 都会让本机探测一路绿灯而对外全 404）。
+            echo "[deploy] --- public checks ---"
+            code=$(curl -sS -m 15 -o /tmp/nf-health.txt -w '%{http_code}' "$BASE_URL/healthz")
+            [ "$code" = "200" ] || { echo "body:"; cat /tmp/nf-health.txt; fail "$BASE_URL/healthz 期望 200，实际 $code"; }
+            echo "[deploy] GET /healthz -> 200  $(head -c 200 /tmp/nf-health.txt)"
+
+            code=$(curl -sS -m 15 -D /tmp/nf-wf.h -o /tmp/nf-wf.json -w '%{http_code}' "$BASE_URL/api/workflows")
+            [ "$code" = "401" ] || { echo "body:"; head -c 400 /tmp/nf-wf.json; fail "$BASE_URL/api/workflows 期望 401（无 token），实际 $code"; }
+            grep -qi '^content-type: application/json' /tmp/nf-wf.h || { cat /tmp/nf-wf.h; fail "/api/workflows 返回的不是 JSON（是不是落回了静态站？）"; }
+            head -c 1 /tmp/nf-wf.json | grep -q '{' || { head -c 200 /tmp/nf-wf.json; fail "/api/workflows 的响应体不是 JSON 对象"; }
+            echo "[deploy] GET /api/workflows (no token) -> 401 JSON  $(head -c 200 /tmp/nf-wf.json)"
+
+            # ---- d. 前端：版本化目录 + 原子软链 -----------------------------
+            echo "[deploy] === 3/4 frontend switch ==="
             VERSION=$(date +%Y%m%d-%H%M%S)
-            RELEASE_DIR="${RELEASES_DIR}/${VERSION}"
+            RELEASE_DIR="$RELEASES_DIR/$VERSION"
+            $SUDO mkdir -p "$RELEASE_DIR"
+            $SUDO tar -xzf /tmp/frontend.tar.gz -C "$RELEASE_DIR"
+            rm -f /tmp/frontend.tar.gz
 
-            # 1. 准备版本目录
-            mkdir -p "${RELEASE_DIR}"
+            # 先在新目录上断言产物是"真 API"版本，再切软链：
+            # 切换之后再发现不对，就得靠回滚去救，成本高得多。
+            $SUDO grep -rq '/api/auth/login' "$RELEASE_DIR/assets" \
+              || fail "新前端产物里没有 /api/auth/login，拒绝切换"
+            if $SUDO grep -rq '技术分析工作流' "$RELEASE_DIR/assets"; then
+              fail "新前端产物里含 mock 标识（技术分析工作流），拒绝切换"
+            fi
+            echo "[deploy] bundle check ok: real API calls present, no mock marker"
 
-            # 2. 解压新版本
-            tar -xzf /tmp/frontend.tar.gz -C "${RELEASE_DIR}"
-            rm /tmp/frontend.tar.gz
+            # 先建临时链接再 rename，避免 current 短暂不存在
+            $SUDO ln -sfn "$RELEASE_DIR" "${CURRENT_LINK}.tmp"
+            $SUDO mv -T "${CURRENT_LINK}.tmp" "$CURRENT_LINK"
 
-            # 3. 更新软链接（原子切换）
-            #    先建临时链接再 rename，避免 current 短暂不存在
-            ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}.tmp"
-            mv -T "${CURRENT_LINK}.tmp" "${CURRENT_LINK}"
+            # 保留最近 5 个版本
+            $SUDO bash -c "cd '$RELEASES_DIR' && ls -t | tail -n +6 | xargs -r rm -rf"
 
-            # 4. 保留最近 5 个版本，旧的删除
-            cd "${RELEASES_DIR}"
-            ls -t | tail -n +6 | xargs -r rm -rf
+            # ---- e. 首页复验 + 状态回显 ------------------------------------
+            echo "[deploy] === 4/4 verify ==="
+            code=$(curl -sS -m 15 -o /tmp/nf-index.html -w '%{http_code}' "$BASE_URL/")
+            [ "$code" = "200" ] || fail "首页期望 200，实际 $code"
+            grep -q 'id="root"' /tmp/nf-index.html || fail "首页 HTML 里没有 #root 挂载点（是不是没解压成功？）"
+            echo "[deploy] GET / -> 200 ($(wc -c < /tmp/nf-index.html) bytes)"
 
-            # 5. 同步 nginx 配置（root 指向 current 软链接）并 reload
-            cp /tmp/nebula.conf /etc/nginx/conf.d/nebula.conf
-            rm -f /tmp/nebula.conf
-            nginx -t && nginx -s reload
-
+            echo "[deploy] --- server state ---"
+            $SUDO docker compose -f /opt/nebulaflow/docker-compose.server.yml --project-directory /opt/nebulaflow ps
+            echo "[deploy] systemctl is-active nebulaflow: $($SUDO systemctl is-active nebulaflow || true)"
+            echo "[deploy] current release: $(readlink -f $CURRENT_LINK)"
             echo "deploy ok: ${VERSION}"
