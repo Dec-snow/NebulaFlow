@@ -59,13 +59,22 @@ const (
 	WorkflowPublished WorkflowStatus = "published"
 )
 
+// SystemTemplateUserID 是"系统模板"在 Go 侧的归属哨兵值：0 表示不属于任何用户。
+//
+// 它只是**应用层**的表示。库里 workflows.user_id 的外键指向 users(id)，
+// 而 users.id 由 BIGSERIAL 生成、永远从 1 开始 —— 直接写 0 会被外键拒绝
+// （SQLSTATE 23503）。因此 store 层负责在读写边界做翻译：
+// 写入时 0 → NULL（仅限 is_template=true），读出时 NULL → 0。
+// 这样内存实现、API JSON 与前端（按 user_id === 0 识别系统模板）都不需要改。
+const SystemTemplateUserID int64 = 0
+
 type Workflow struct {
 	ID          int64          `json:"id"`
 	UserID      int64          `json:"user_id"`
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Status      WorkflowStatus `json:"status"`
-	// IsTemplate 标记为模板：user_id=0 的系统模板所有用户可见，
+	// IsTemplate 标记为模板：user_id=0（库里为 NULL）的系统模板所有用户可见，
 	// 普通用户的模板仅自己可见。
 	IsTemplate bool `json:"is_template"`
 	// Category 是模板分类（如 "客服"、"数据分析"、"代码助手"）。

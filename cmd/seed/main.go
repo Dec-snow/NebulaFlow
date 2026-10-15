@@ -3,9 +3,12 @@
 //   - 写入 mock LLM Provider（离线可用）+ deepseek 占位
 //   - 创建演示知识库「岗位JD库」并索引一份岗位要求文档（供 RAG 节点检索）
 //   - 创建一个示例工作流（简历分析 Agent：Parser → RAG → Analyst → Writer → Output）
+//   - 写入 5 个系统模板（模板市场）与 6 个系统 Agent（Agent 市场）
 //
 // 用法：go run ./cmd/seed
-// 幂等：重复执行会复用已存在的用户/Provider/知识库/工作流。
+// 幂等：重复执行会复用已存在的用户/Provider/知识库/工作流/模板/Agent。
+// 失败语义：系统模板/系统 Agent 任何一条写不进去都以**非零退出码**结束 ——
+// 这两类数据是"系统级"的，静默漏写会让模板市场/Agent 市场直接空掉。
 package main
 
 import (
@@ -14,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hoarfrost/nebulaflow/internal/config"
@@ -219,16 +223,30 @@ func main() {
 		fmt.Printf("\nDemo 登录：demo / demo123456\nWorkflow ID: %d\n", detail.ID)
 	}
 
-	// 5. 系统模板（user_id=0，所有用户可见）
-	seedTemplates(ctx, st)
-
+	// 5. 系统模板（Go 侧 UserID=0，库里落成 user_id IS NULL，所有用户可见）
 	// 6. 系统 Agent（user_id=0，Agent 市场）
-	seedAgents(ctx, st)
+	//
+	// 两者都必须真的成功：历史上 seed 只 log.Printf 掉模板写入失败（外键 23503），
+	// 退出码仍是 0，于是"线上模板市场是空的"这件事被 CI 日志掩盖了很久。
+	// 现在任何一条系统级种子数据写不进去都以非零退出码结束。
+	var seedErrs []string
+	if err := seedTemplates(ctx, st); err != nil {
+		seedErrs = append(seedErrs, err.Error())
+	}
+	if err := seedAgents(ctx, st); err != nil {
+		seedErrs = append(seedErrs, err.Error())
+	}
+	if len(seedErrs) > 0 {
+		log.Fatalf("seed 未完全成功:\n  - %s", strings.Join(seedErrs, "\n  - "))
+	}
 }
 
-// seedTemplates 初始化系统模板（幂等：按名称检查是否已存在）。
-// 模板 user_id=0 表示系统级，所有用户都能在模板市场看到。
-func seedTemplates(ctx context.Context, st *store.Store) {
+// seedTemplates 初始化系统模板（幂等：按"系统归属 + 名称"检查是否已存在）。
+//
+// 模板在 Go 侧用 UserID=0 / IsTemplate=true 表示系统级，store 会把它落成
+// user_id IS NULL —— 库里 NULL 才满足 workflows.user_id 的外键；
+// 直接写 0 会被 FK 拒绝（SQLSTATE 23503 workflows_user_id_fkey）。
+func seedTemplates(ctx context.Context, st *store.Store) error {
 	templates := []struct {
 		name        string
 		description string
@@ -426,36 +444,47 @@ func seedTemplates(ctx context.Context, st *store.Store) {
 		},
 	}
 
+	// 幂等检查只查一次：把已有的系统模板收成名字集合，
+	// 避免在循环里对每个模板都重跑一遍 ListTemplates。
+	existing, err := st.Workflows.ListTemplates(ctx, model.SystemTemplateUserID, "")
+	if err != nil {
+		return fmt.Errorf("读取已有系统模板失败: %w", err)
+	}
+	have := make(map[string]bool, len(existing))
+	for _, w := range existing {
+		if w.UserID == model.SystemTemplateUserID {
+			have[w.Name] = true
+		}
+	}
+
 	created := 0
 	skipped := 0
+	var failed []string
 	for _, t := range templates {
-		// 检查是否已存在（系统模板 user_id=0）
-		existing, _ := st.Workflows.ListTemplates(ctx, 0, "")
-		found := false
-		for _, w := range existing {
-			if w.Name == t.name && w.UserID == 0 {
-				found = true
-				break
-			}
-		}
-		if found {
+		if have[t.name] {
 			skipped++
 			continue
 		}
 		wf := t.build()
 		if err := st.Workflows.CreateWorkflow(ctx, wf); err != nil {
 			log.Printf("create template %q failed: %v", t.name, err)
+			failed = append(failed, fmt.Sprintf("%s: %v", t.name, err))
 			continue
 		}
 		created++
-		log.Printf("created template %q (category=%q)", t.name, t.category)
+		log.Printf("created template %q (id=%d, category=%q)", t.name, wf.ID, t.category)
 	}
 	log.Printf("templates seeded: %d created, %d skipped (total %d)", created, skipped, len(templates))
+	if len(failed) > 0 {
+		return fmt.Errorf("%d/%d 个系统模板写入失败: %s", len(failed), len(templates), strings.Join(failed, " | "))
+	}
+	return nil
 }
 
 // seedAgents 初始化系统 Agent（user_id=0，Agent 市场）。
 // 幂等：按名称检查是否已存在。
-func seedAgents(ctx context.Context, st *store.Store) {
+// 注：agent_registry.user_id 没有外键，0 在那边是合法值，因此这里不需要 NULL 语义。
+func seedAgents(ctx context.Context, st *store.Store) error {
 	agents := []struct {
 		name         string
 		description  string
@@ -523,6 +552,7 @@ func seedAgents(ctx context.Context, st *store.Store) {
 
 	created := 0
 	skipped := 0
+	var failed []string
 	for _, a := range agents {
 		// 检查是否已存在（系统 Agent user_id=0）
 		existing, err := st.Agents.GetAgentByName(ctx, 0, a.name)
@@ -544,12 +574,17 @@ func seedAgents(ctx context.Context, st *store.Store) {
 		}
 		if err := st.Agents.CreateAgent(ctx, agent); err != nil {
 			log.Printf("create system agent %q failed: %v", a.name, err)
+			failed = append(failed, fmt.Sprintf("%s: %v", a.name, err))
 			continue
 		}
 		created++
 		log.Printf("created system agent %q (runtime=%s)", a.name, a.runtimeType)
 	}
 	log.Printf("system agents seeded: %d created, %d skipped (total %d)", created, skipped, len(agents))
+	if len(failed) > 0 {
+		return fmt.Errorf("%d/%d 个系统 Agent 写入失败: %s", len(failed), len(agents), strings.Join(failed, " | "))
+	}
+	return nil
 }
 
 // jdContent 是演示用的岗位要求文档，关键词覆盖 Go/DAG/高并发等，
