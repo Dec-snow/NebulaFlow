@@ -234,6 +234,17 @@ jobs:
 
             [ -d "$STAGING" ] || fail "缺少 $STAGING（scp 步骤失败？）"
 
+            # backend.tar.gz 落在 /tmp（和 frontend.tar.gz 一起 scp 上来的），
+            # 但 server-setup.sh 只认扁平布局 $STAGING/bin/<name> ——
+            # 少了这一步，部署会在"staging 缺少二进制"上直接失败（第一次就是这么炸的）。
+            # 前端包刻意不解压：它要等到后端验完、前端可切换时才动。
+            echo "[deploy] === 0/4 extract backend binaries ==="
+            [ -f /tmp/backend.tar.gz ] || fail "缺少 /tmp/backend.tar.gz（制品下载或 scp 失败？）"
+            mkdir -p "$STAGING/bin"
+            tar -xzf /tmp/backend.tar.gz -C "$STAGING/bin"
+            rm -f /tmp/backend.tar.gz
+            ls -l "$STAGING/bin"
+
             # ---- a + b. 基础设施 → 后端 → /healthz 200 ----------------------
             # server-setup.sh 是幂等的：重复执行不会重置 .env 里的密钥、
             # 不会重建数据卷、已经 healthy 的容器不会重启。
@@ -251,11 +262,21 @@ jobs:
             # 后端能起不代表 nginx 的反代对了（location 写错、reload 没生效、
             # 别处的 vhost 抢了 server_name 都会让本机探测一路绿灯而对外全 404）。
             echo "[deploy] --- public checks ---"
-            code=$(curl -sS -m 15 -o /tmp/nf-health.txt -w '%{http_code}' "$BASE_URL/healthz")
+            # 为什么重试而不是一次定生死：`nginx -s reload` 是立刻返回的，
+            # 旧 worker 要把手头连接处理完才退出，紧接着那一次请求仍可能落到
+            # 还在用**旧配置**的 worker 上（本地 dry-run 时实测见过一次 /healthz 502）。
+            # 真正的"反代配错"会一直失败，不会被这十来秒的重试掩盖。
+            code=""
+            for i in $(seq 1 10); do
+              code=$(curl -sS -m 15 -o /tmp/nf-health.txt -w '%{http_code}' "$BASE_URL/healthz" 2>/dev/null || echo "000")
+              [ "$code" = "200" ] && break
+              echo "[deploy] /healthz -> $code，2s 后重试（第 $i 次）"
+              sleep 2
+            done
             [ "$code" = "200" ] || { echo "body:"; cat /tmp/nf-health.txt; fail "$BASE_URL/healthz 期望 200，实际 $code"; }
             echo "[deploy] GET /healthz -> 200  $(head -c 200 /tmp/nf-health.txt)"
 
-            code=$(curl -sS -m 15 -D /tmp/nf-wf.h -o /tmp/nf-wf.json -w '%{http_code}' "$BASE_URL/api/workflows")
+            code=$(curl -sS -m 15 -D /tmp/nf-wf.h -o /tmp/nf-wf.json -w '%{http_code}' "$BASE_URL/api/workflows" 2>/dev/null || echo "000")
             [ "$code" = "401" ] || { echo "body:"; head -c 400 /tmp/nf-wf.json; fail "$BASE_URL/api/workflows 期望 401（无 token），实际 $code"; }
             grep -qi '^content-type: application/json' /tmp/nf-wf.h || { cat /tmp/nf-wf.h; fail "/api/workflows 返回的不是 JSON（是不是落回了静态站？）"; }
             head -c 1 /tmp/nf-wf.json | grep -q '{' || { head -c 200 /tmp/nf-wf.json; fail "/api/workflows 的响应体不是 JSON 对象"; }
@@ -287,7 +308,7 @@ jobs:
 
             # ---- e. 首页复验 + 状态回显 ------------------------------------
             echo "[deploy] === 4/4 verify ==="
-            code=$(curl -sS -m 15 -o /tmp/nf-index.html -w '%{http_code}' "$BASE_URL/")
+            code=$(curl -sS -m 15 -o /tmp/nf-index.html -w '%{http_code}' "$BASE_URL/" 2>/dev/null || echo "000")
             [ "$code" = "200" ] || fail "首页期望 200，实际 $code"
             grep -q 'id="root"' /tmp/nf-index.html || fail "首页 HTML 里没有 #root 挂载点（是不是没解压成功？）"
             echo "[deploy] GET / -> 200 ($(wc -c < /tmp/nf-index.html) bytes)"
