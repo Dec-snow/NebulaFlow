@@ -17,8 +17,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Avatar } from "@/components/ui";
+import { api } from "@/api";
 import { cn } from "@/lib/utils";
-import { useI18n, type Locale } from "@/i18n";
+import { useI18n, type I18nKey, type Locale } from "@/i18n";
 import { BrandMark } from "./Brand";
 
 interface NavItem {
@@ -52,8 +53,18 @@ const LANGS: { locale: Locale; label: string; short: string }[] = [
 /**
  * 根据 i18n 字典生成导航组配置。
  * 图标与路径是结构化数据，label / title 走翻译。
+ *
+ * `runningTasks` 来自 `GET /api/dashboard/stats`：这是**真实计数**，
+ * 之前这里写死的 `badge: 2` 是 mock 时代的残留 —— 接真后端后会显示一个
+ * 与任何数据都对不上的数字。取不到（或为 0）时整个徽标不渲染，
+ * 而不是退化成 0 或占位符。
  */
-function buildNavGroups(t: (key: string) => string): NavGroup[] {
+function buildNavGroups(
+  t: (key: I18nKey) => string,
+  runningTasks: number | null,
+): NavGroup[] {
+  const taskBadge =
+    runningTasks !== null && runningTasks > 0 ? { badge: runningTasks, badgeTone: "sky" as const } : {};
   return [
     {
       title: t("nav.overview"),
@@ -64,7 +75,7 @@ function buildNavGroups(t: (key: string) => string): NavGroup[] {
       items: [
         { to: "/workflows", label: t("nav.workflows"), icon: GitBranch },
         { to: "/templates", label: t("nav.templates"), icon: Sparkles },
-        { to: "/tasks", label: t("nav.tasks"), icon: Activity, badge: 2, badgeTone: "sky" },
+        { to: "/tasks", label: t("nav.tasks"), icon: Activity, ...taskBadge },
       ],
     },
     {
@@ -97,7 +108,31 @@ export function Sidebar({
   onLogout: () => void;
 }) {
   const { locale, setLocale, t } = useI18n();
-  const groups = buildNavGroups(t);
+  const [runningTasks, setRunningTasks] = useState<number | null>(null);
+
+  // 侧边栏徽标：真实"运行中任务数"。取不到就隐藏（不显示编造的数字）。
+  // 30s 轮询是刻意的低频：这里是全局外壳，跑得太勤会给每个页面都加噪声请求。
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      api.dashboard
+        .stats()
+        .then((s) => {
+          if (alive) setRunningTasks(s.runningTasks ?? null);
+        })
+        .catch(() => {
+          if (alive) setRunningTasks(null);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const groups = buildNavGroups(t, runningTasks);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(COLLAPSE_KEY) === "1";

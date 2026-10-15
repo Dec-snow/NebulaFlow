@@ -135,12 +135,20 @@ export default function Templates() {
   }, [categoryList]);
 
   const handleUse = async (id: number, name: string) => {
-    const res = await api.templates.use(id);
-    toast(`${name} 使用成功，已创建新工作流`, "success");
-    // 延迟跳转到编辑器
-    setTimeout(() => {
-      navigate(`/workflows/${res.workflowId}`);
-    }, 800);
+    try {
+      // POST /api/templates/:id/use → 后端从模板复制出一份新的工作流
+      const res = await api.templates.use(id);
+      if (res.workflowId === null) {
+        toast("模板已复制，但后端未返回新的工作流 ID", "error");
+        return;
+      }
+      toast(`${name} 使用成功，已创建工作流 #${res.workflowId}`, "success");
+      setTimeout(() => {
+        navigate(`/workflows/${res.workflowId}`);
+      }, 800);
+    } catch (e) {
+      toast(`使用模板失败：${(e as Error).message}`, "error");
+    }
   };
 
   if (loading) {

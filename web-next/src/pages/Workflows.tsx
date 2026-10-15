@@ -1,34 +1,39 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   GitBranch,
-  MoreHorizontal,
   Plus,
   Search,
-  TrendingUp,
+  Trash2,
 } from "lucide-react";
 import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
+  Field,
   IconButton,
   Input,
   PageLoader,
   Segmented,
   StatusBadge,
+  ToastContainer,
+  useToast,
 } from "@/components/ui";
 import { api } from "@/api";
 import { useDebounce, useFetch } from "@/hooks";
 import type { WorkflowSummary } from "@/types";
 import { cn, numberOrNull, timeAgo } from "@/lib/utils";
 
+/** 每页条数：与 api 层"为列表补详情"的上限（24）对齐，避免拉不到的条目显示空统计 */
+const PAGE_SIZE = 24;
+
 /** 迷你 DAG 缩略图：把节点相对坐标映射到小视口，仅表达拓扑形状。 */
 function MiniDag({ wf }: { wf: WorkflowSummary }) {
-  // 列表接口不下发拓扑：后端的 workflow 列表是 `nodes,omitempty`（未 join
-  // workflow_nodes 时为 nil），也没有 mini/miniEdges 这种字段。
-  // 所以这里先兜底成空数组——否则 wf.mini.forEach 会直接抛 TypeError 白屏。
+  // 列表接口本身不下发 nodes/edges；api 层会为当前页补一次详情，
+  // 因此这里拿到的是真实拓扑（归一化坐标 + 真实连线），拉不到时给占位提示。
   const mini = Array.isArray(wf.mini) ? wf.mini : [];
   const miniEdges = Array.isArray(wf.miniEdges) ? wf.miniEdges : [];
 
@@ -95,13 +100,11 @@ function MiniDag({ wf }: { wf: WorkflowSummary }) {
   );
 }
 
-function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
-  // 统计字段是后端列表接口的"期望值"而非承诺：没有就隐藏，
-  // 而不是渲染出 "undefined 节点" / "NaN%"。
+function WorkflowCard({ wf, onDelete }: { wf: WorkflowSummary; onDelete: (wf: WorkflowSummary) => void }) {
+  // 统计字段由 api 层补详情后写入；拉不到详情时保持 undefined →
+  // 隐藏对应 UI，而不是渲染 "undefined 节点" / "NaN%"。
   const nodeCount = numberOrNull(wf.nodeCount);
   const edgeCount = numberOrNull(wf.edgeCount);
-  const successRate = numberOrNull(wf.successRate);
-  const runs = numberOrNull(wf.runs);
 
   return (
     <Link to={`/workflows/${wf.id}`} className="group block">
@@ -110,15 +113,20 @@ function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
           <div className="min-w-0">
             <h3 className="truncate text-sm font-semibold text-fg">{wf.name}</h3>
             <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg-subtle">
-              {wf.description}
+              {wf.description || "暂无描述"}
             </p>
           </div>
-          <div
-            onClick={(e) => e.preventDefault()}
-            className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-          >
-            <IconButton label="更多操作" variant="ghost">
-              <MoreHorizontal size={15} />
+          <div className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+            <IconButton
+              label="删除工作流"
+              variant="ghost"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete(wf);
+              }}
+            >
+              <Trash2 size={14} className="text-rose" />
             </IconButton>
           </div>
         </div>
@@ -137,25 +145,12 @@ function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
         <div className="divider my-3.5" />
 
         <div className="flex items-center justify-between text-2xs">
-          <div className="flex items-center gap-1.5 text-fg-subtle">
-            <TrendingUp size={12} />
-            <span className="tnum">
-              {runs === null ? "运行数未知" : `${runs} 次运行`}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            {successRate !== null && (
-              <span
-                className={cn(
-                  "tnum font-medium",
-                  successRate >= 98 ? "text-mint" : "text-amber",
-                )}
-              >
-                {successRate}%
-              </span>
-            )}
-            <span className="text-fg-subtle">{timeAgo(wf.updatedAt)}</span>
-          </div>
+          {/* 后端没有 runs / success_rate：不再显示"运行数未知"这类伪字段，
+              只展示真实存在的更新时间。 */}
+          <span className="text-fg-subtle">
+            {wf.isTemplate ? "模板" : "自有工作流"}
+          </span>
+          <span className="text-fg-subtle">更新于 {timeAgo(wf.updatedAt)}</span>
         </div>
       </Card>
     </Link>
@@ -163,29 +158,83 @@ function WorkflowCard({ wf }: { wf: WorkflowSummary }) {
 }
 
 export default function Workflows() {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<"all" | "published" | "draft">("all");
   const [q, setQ] = useState("");
   const debouncedQ = useDebounce(q, 300);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<WorkflowSummary | null>(null);
+  const { toasts, toast } = useToast();
 
   const { data, loading, error, refresh } = useFetch(
     () =>
       api.workflows.list({
         status: filter === "all" ? undefined : filter,
         q: debouncedQ || undefined,
+        pageSize: PAGE_SIZE,
       }),
     [filter, debouncedQ],
   );
 
-  // 列表接口不一定下发 items / total（分页字段缺失时后端可能只回数组本身）
+  // 列表接口不下发 items/total 时才可能是 undefined：统一收成数组/数字
   const list = Array.isArray(data?.items) ? data.items : [];
   const total = numberOrNull(data?.total) ?? 0;
 
-  // 计算各状态数量（用全量数据近似，实际应由后端返回）
-  const allList = list;
-  const counts = {
-    all: total,
-    published: allList.filter((w) => w.status === "published").length,
-    draft: allList.filter((w) => w.status === "draft").length,
+  const counts = useMemo(() => {
+    return {
+      all: total,
+      published: list.filter((w) => w.status === "published").length,
+      draft: list.filter((w) => w.status === "draft").length,
+    };
+  }, [list, total]);
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name) {
+      toast("请填写工作流名称", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      // 后端会拒绝空工作流（scheduler.ErrEmptyWorkflow），所以创建一个
+      // 最小可运行骨架：input → output。节点/连线都是真实可保存的结构。
+      const created = await api.workflows.create({
+        name,
+        description: newDesc.trim(),
+        status: "draft",
+        nodes: [
+          { id: "input", type: "input", x: 80, y: 200, config: { label: "输入" } },
+          { id: "output", type: "output", x: 460, y: 200, config: { label: "输出" } },
+        ],
+        edges: [["input", "output"]],
+      });
+      toast(`已创建工作流「${created.name}」`, "success");
+      setCreating(false);
+      setNewName("");
+      setNewDesc("");
+      if (created.id) navigate(`/workflows/${created.id}`);
+      else refresh();
+    } catch (e) {
+      toast(`创建失败：${(e as Error).message}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    const target = deleteTarget;
+    if (!target) return;
+    try {
+      await api.workflows.remove(target.id);
+      toast(`已删除「${target.name}」`, "success");
+      setDeleteTarget(null);
+      refresh();
+    } catch (e) {
+      toast(`删除失败：${(e as Error).message}`, "error");
+    }
   };
 
   if (loading) return <PageLoader text="加载工作流列表…" />;
@@ -202,10 +251,47 @@ export default function Workflows() {
             共 {total} 个工作流 · 拖拽节点即可编排 DAG
           </p>
         </div>
-        <Button variant="brand" icon={<Plus size={15} />}>
+        <Button
+          variant="brand"
+          icon={<Plus size={15} />}
+          onClick={() => setCreating((v) => !v)}
+        >
           新建工作流
         </Button>
       </div>
+
+      {/* 新建表单 */}
+      {creating && (
+        <Card>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="名称">
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="例如：日报生成流水线"
+              />
+            </Field>
+            <Field label="描述（可选）">
+              <Input
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                placeholder="一句话说明这个工作流做什么"
+              />
+            </Field>
+          </div>
+          <div className="mt-4 flex items-center gap-2">
+            <Button variant="brand" size="sm" onClick={handleCreate} disabled={busy}>
+              {busy ? "创建中…" : "创建并打开编辑器"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+              取消
+            </Button>
+            <span className="text-2xs text-fg-subtle">
+              会创建一个 input → output 的最小骨架（后端不允许保存空工作流）
+            </span>
+          </div>
+        </Card>
+      )}
 
       {/* 过滤条 */}
       <div className="flex flex-wrap items-center gap-3">
@@ -236,8 +322,12 @@ export default function Workflows() {
       {list.length === 0 ? (
         <EmptyState
           icon={<GitBranch size={19} />}
-          title="没有匹配的工作流"
-          description="换个关键词，或清空筛选条件再看看。"
+          title={total === 0 && !debouncedQ && filter === "all" ? "还没有工作流" : "没有匹配的工作流"}
+          description={
+            total === 0 && !debouncedQ && filter === "all"
+              ? "点右上角「新建工作流」创建第一个 DAG。"
+              : "换个关键词，或清空筛选条件再看看。"
+          }
           action={
             <Button
               variant="outline"
@@ -253,7 +343,11 @@ export default function Workflows() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {list.map((wf) => (
-            <WorkflowCard key={wf.id} wf={wf} />
+            <WorkflowCard
+              key={wf.id}
+              wf={wf}
+              onDelete={(target) => setDeleteTarget(target)}
+            />
           ))}
         </div>
       )}
@@ -265,6 +359,19 @@ export default function Workflows() {
           保存时会做环检测与悬挂边校验，非法 DAG（如 A→B→C→A）会被直接拒绝。
         </p>
       </div>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={`删除「${deleteTarget?.name ?? ""}」？`}
+        description="删除后无法恢复，该工作流的历史任务记录仍会保留。"
+        confirmText="删除"
+        cancelText="取消"
+        tone="danger"
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ToastContainer toasts={toasts} />
     </div>
   );
 }

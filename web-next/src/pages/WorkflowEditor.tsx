@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   addEdge,
   Background,
@@ -42,17 +42,22 @@ import { Undo2, Redo2 } from "lucide-react";
 import {
   Badge,
   Button,
+  ErrorState,
   Field,
   IconButton,
   Input,
+  PageLoader,
   Select,
+  StatusBadge,
   Textarea,
   ToastContainer,
   useToast,
 } from "@/components/ui";
 import { api } from "@/api";
-import { EDITOR_EDGES, EDITOR_NODES, PROMPT_TEMPLATES, type EditorNode } from "@/lib/mock";
+import { useFetch } from "@/hooks";
+import { PROMPT_TEMPLATES } from "@/lib/mock";
 import { cn } from "@/lib/utils";
+import type { EditorNode, WorkflowStatus } from "@/types";
 
 /* ------------------------------------------------------------------ 类型 */
 type NodeKind = EditorNode["type"];
@@ -369,36 +374,40 @@ function WorkflowNodeView({ id, data, selected }: NodeProps<WFNode>) {
 /* ------------------------------------------------------------------ 主体 */
 function EditorInner() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { screenToFlowPosition, deleteElements, fitView } = useReactFlow();
   const wrapRef = useRef<HTMLDivElement>(null);
   const { toasts, toast } = useToast();
 
-  const initialNodes = useMemo<WFNode[]>(
-    () =>
-      EDITOR_NODES.map((n) => ({
-        id: n.id,
-        type: "wf" as const,
-        position: { x: n.x, y: n.y },
-        data: { kind: n.type, config: n.config },
-      })),
-    [],
-  );
+  const initialNodes = useMemo<WFNode[]>(() => [], []);
 
-  const initialEdges = useMemo<Edge[]>(
-    () =>
-      EDITOR_EDGES.map(([source, target], i) => ({
-        id: `e-${source}-${target}-${i}`,
-        source,
-        target,
-        type: "smoothstep",
-      })),
-    [],
-  );
+  const initialEdges = useMemo<Edge[]>(() => [], []);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<WFNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialEdges);
-  const [selectedId, setSelectedId] = useState<string | null>("analyst");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+
+  /* ---------- 从后端加载工作流（GET /api/workflows/:id） ---------- */
+  const workflowId = Number(id);
+  const {
+    data: detail,
+    loading: detailLoading,
+    error: detailError,
+    refresh: reloadDetail,
+  } = useFetch(
+    () =>
+      Number.isFinite(workflowId) && workflowId > 0
+        ? api.workflows.get(workflowId)
+        : Promise.resolve(null),
+    [workflowId],
+  );
+
+  const [meta, setMeta] = useState<{ name: string; status: WorkflowStatus }>({
+    name: "",
+    status: "draft",
+  });
+  const hydratedRef = useRef<number | null>(null);
 
   /* ---------- 撤销 / 重做历史栈 ---------- */
   const historyRef = useRef<{ nodes: WFNode[]; edges: Edge[] }[]>([]);
@@ -425,6 +434,39 @@ function EditorInner() {
     pushHistory(initialNodes, initialEdges);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 详情到达后把后端的 nodes/edges 灌进画布，并重置撤销栈。
+  // 用 hydratedRef 去重：useFetch 在 range/依赖变化时会重新返回同一份数据，
+  // 重复灌入会把用户未保存的编辑覆盖掉。
+  useEffect(() => {
+    if (!detail) return;
+    if (hydratedRef.current === detail.id) return;
+    hydratedRef.current = detail.id;
+
+    const nds: WFNode[] = detail.nodes.map((n) => ({
+      id: n.id,
+      type: "wf" as const,
+      position: { x: n.x, y: n.y },
+      data: { kind: n.type, config: n.config },
+    }));
+    const eds: Edge[] = detail.edges.map(([source, target], i) => ({
+      id: `e-${source}-${target}-${i}`,
+      source,
+      target,
+      type: "smoothstep",
+    }));
+
+    setMeta({ name: detail.name, status: detail.status });
+    skipHistoryRef.current = true;
+    setNodes(nds);
+    setEdges(eds);
+    historyRef.current = [{ nodes: nds, edges: eds }];
+    historyIndexRef.current = 0;
+    setSelectedId(nds[0]?.id ?? null);
+    window.setTimeout(() => {
+      skipHistoryRef.current = false;
+    }, 0);
+  }, [detail, setNodes, setEdges]);
 
   const canUndo = historyIndexRef.current > 0;
   const canRedo = historyIndexRef.current < historyRef.current.length - 1;
@@ -634,8 +676,16 @@ function EditorInner() {
 
   const handleSave = async () => {
     setWarning(null);
-    const workflowId = Number(id) || 1;
-    // 将节点和边转换为 API 需要的格式
+    if (!Number.isFinite(workflowId) || workflowId <= 0) {
+      toast("工作流 ID 非法，无法保存", "error");
+      return;
+    }
+    if (!meta.name.trim()) {
+      toast("工作流名称不能为空", "error");
+      return;
+    }
+    // 将节点和边转换为 API 需要的格式（api 层负责 camelCase → 后端 snake_case，
+    // 并把后端 NodeConfig 不认识的扩展键塞进 extra，避免往返丢字段）
     const editorNodes: EditorNode[] = nodes.map((n) => ({
       id: n.id,
       type: n.data.kind,
@@ -645,17 +695,15 @@ function EditorInner() {
     }));
     const editorEdges: [string, string][] = edges.map((e) => [e.source, e.target]);
     try {
-      const res = await api.workflows.save(workflowId, {
+      await api.workflows.save(workflowId, {
+        name: meta.name.trim(),
+        status: meta.status,
         nodes: editorNodes,
         edges: editorEdges,
       });
-      if (res.success) {
-        toast("保存成功", "success");
-      } else {
-        toast("保存失败，请重试", "error");
-      }
+      toast("保存成功", "success");
     } catch (e) {
-      toast("保存失败，请检查网络", "error");
+      toast(`保存失败：${(e as Error).message}`, "error");
     }
   };
 
@@ -665,6 +713,44 @@ function EditorInner() {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void el.requestFullscreen();
   };
+
+  /* ---------- 运行：POST /api/tasks ---------- */
+  const handleRun = async () => {
+    if (!Number.isFinite(workflowId) || workflowId <= 0) return;
+    const inputNode = nodes.find((n) => n.data.kind === "input");
+    const input =
+      (inputNode?.data.config.prompt as string | undefined) ||
+      (inputNode?.data.config.label as string | undefined) ||
+      "";
+    try {
+      const created = await api.tasks.create({ workflowId, input });
+      toast(`已提交任务 #${created.id}`, "success");
+      navigate(`/tasks/${created.id}`);
+    } catch (e) {
+      toast(`提交失败：${(e as Error).message}`, "error");
+    }
+  };
+
+  if (detailLoading) return <PageLoader text="加载工作流…" />;
+
+  if (detailError) {
+    return (
+      <ErrorState
+        title="加载工作流失败"
+        description={detailError.message}
+        onRetry={reloadDetail}
+      />
+    );
+  }
+
+  if (!detail) {
+    return (
+      <ErrorState
+        title="工作流不存在"
+        description={`没有 ID 为 ${id} 的工作流，或它不属于当前账号。`}
+      />
+    );
+  }
 
   return (
     <div
@@ -681,13 +767,16 @@ function EditorInner() {
           返回
         </Link>
         <div className="h-5 w-px bg-line" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold text-fg">技术分析工作流</span>
-            <Badge tone="mint">已发布</Badge>
-          </div>
-          <div className="tnum text-2xs text-fg-subtle">
-            #{id ?? 1} · {nodes.length} 节点 · {edges.length} 连线
+        <div className="flex min-w-0 items-center gap-2">
+          <Input
+            value={meta.name}
+            onChange={(e) => setMeta((m) => ({ ...m, name: e.target.value }))}
+            className="h-8 w-56 text-sm font-semibold"
+            placeholder="工作流名称"
+          />
+          <StatusBadge status={meta.status} />
+          <div className="tnum shrink-0 text-2xs text-fg-subtle">
+            #{workflowId} · {nodes.length} 节点 · {edges.length} 连线
           </div>
         </div>
 
@@ -695,7 +784,6 @@ function EditorInner() {
           <div className="mr-2 flex items-center gap-1 border-r border-line pr-2">
             <IconButton
               label="撤销 (Ctrl+Z)"
-              size="sm"
               onClick={undo}
               disabled={!canUndo}
             >
@@ -703,18 +791,17 @@ function EditorInner() {
             </IconButton>
             <IconButton
               label="重做 (Ctrl+Shift+Z)"
-              size="sm"
               onClick={redo}
               disabled={!canRedo}
             >
               <Redo2 size={14} />
             </IconButton>
           </div>
-          <Badge tone="neutral">已自动保存</Badge>
+          <Badge tone="neutral">Ctrl/Cmd + S 保存</Badge>
           <Button variant="outline" size="sm" icon={<Save size={13} />} onClick={handleSave}>
             保存
           </Button>
-          <Button variant="brand" size="sm" icon={<Play size={13} />}>
+          <Button variant="brand" size="sm" icon={<Play size={13} />} onClick={handleRun}>
             运行
           </Button>
         </div>

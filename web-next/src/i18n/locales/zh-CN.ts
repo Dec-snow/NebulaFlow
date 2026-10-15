@@ -121,4 +121,17 @@ export const zhCN = {
   },
 } as const;
 
-export type TranslationDict = typeof zhCN;
+/**
+ * 把 `as const` 得到的**字面量**类型放宽成 `string`，同时保留键结构。
+ *
+ * 为什么需要这一步：`typeof zhCN` 的每个叶子都是 `"保存"` 这类字面量类型，
+ * 于是 `export const enUS: TranslationDict = {...}` 里任何英文串都会报
+ * "Type '"Save"' is not assignable to type '"保存"'" —— 英文词典**从写下那天起
+ * 就无法通过 `tsc`**（`vite build` 不做类型检查，所以一直没被发现）。
+ *
+ * 键路径（`I18nKey`）由键结构推导，与叶子是不是字面量无关，因此放宽叶子
+ * 类型不会削弱 `t("nav.dashboard")` 的补全与拼写检查。
+ */
+type WidenLeaves<T> = T extends string ? string : { [K in keyof T]: WidenLeaves<T[K]> };
+
+export type TranslationDict = WidenLeaves<typeof zhCN>;
