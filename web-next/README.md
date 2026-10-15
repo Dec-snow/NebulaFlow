@@ -90,12 +90,21 @@ web-next/
 ├── vite.config.ts             # 端口 5174，/api 代理到 8080
 └── src/
     ├── index.css              # ★ 设计系统：token + 组件层 + 工具类
-    ├── App.tsx                # 路由表
+    ├── App.tsx                # 路由表 + 登录守卫（RequireAuth）+ 401 跳转注册
     ├── main.tsx
+    ├── api/
+    │   ├── client.ts          # fetch 封装：超时 / Bearer 注入 / 401 清会话
+    │   ├── index.ts           # realApi：真实 HTTP 实现（默认）
+    │   ├── mock-api.ts        # mockApi：本地演示数据（VITE_USE_MOCK=true）
+    │   ├── service.ts         # ApiService 契约（两个实现共用）
+    │   ├── sse.ts             # fetch+reader 的 SSE 客户端（退避重连 / 终态停止）
+    │   ├── transform.ts       # snake_case → camelCase / 安全取值
+    │   └── config.ts          # USE_MOCK / API_BASE_URL
     ├── lib/
     │   ├── theme.ts           # 主题 store（light/dark/system）
-    │   ├── session.ts         # 会话 store（mock 登录）
-    │   ├── mock.ts            # 演示数据（接真实接口时整体替换）
+    │   ├── session.ts         # 会话 store（真实登录 + token 持久化）
+    │   ├── auth.ts            # token 存取 / 401 通知
+    │   ├── mock.ts            # 演示数据（仅 mock 模式使用）
     │   └── utils.ts           # cn / 时间 / 时长格式化
     ├── components/
     │   ├── ui/                # ★ 基础组件库
@@ -173,8 +182,101 @@ npm run dev        # http://localhost:5174
 所以后端起来时可直接联调（后端支持 `STORAGE_MODE=memory` 零依赖启动）。
 
 ```bash
-npm run build      # 产出 dist/
+npm run build      # 产出 dist/（由 Go 后端托管，单端口）
 ```
+
+### 真实 API 与 Mock 的切换（默认：真实 API）
+
+`src/api/index.ts` 默认打真实 HTTP；**只有显式打开开关才走 mock**：
+
+| 场景 | 命令 / 配置 | 数据来源 |
+| --- | --- | --- |
+| 默认（不设变量） | `npm run build` / `npm run dev` | 真实后端 `/api/*` |
+| 无后端演示 | `VITE_USE_MOCK=true npm run build`（或 `.env.local` 里写 `VITE_USE_MOCK=true`） | `src/lib/mock.ts` 本地演示数据 |
+| 后端在别的地址 | `VITE_API_BASE_URL=http://127.0.0.1:9000` | 该地址的真实后端 |
+
+```bash
+# 无后端也能看的演示包
+VITE_USE_MOCK=true npm run build
+```
+
+开关只影响 `api` 对象指向哪个实现（`realApi` / `mockApi`），
+两者实现同一份 `ApiService` 契约（`src/api/service.ts`），
+组件层代码完全一致 —— 不存在"mock 能跑、真实接口少一个方法"的情况。
+
+`.env.example` 列出了全部变量；`VITE_*` 变量在 **build 时**被静态替换，
+所以改完要重新 build（或让它生效于 `npm run dev` 的启动进程）。
+
+---
+
+## 真实 API 接线说明
+
+数据源的唯一事实来源是 Go 侧：路由见 `internal/api/server.go`，
+请求/响应结构见 `internal/api/handlers_*.go` 与 `internal/model/model.go`
+（json tag 一律 snake_case，`src/api/transform.ts` 统一转 camelCase）。
+
+### 鉴权
+
+- `POST /api/auth/login`、`POST /api/auth/register`（`src/lib/session.ts`）；
+- token 存 `localStorage["nf-token"]`，用户名 / 用户 ID 存 `nf-user` / `nf-user-id`
+  （沿用原有 `nf-*` 键名风格）；
+- 所有请求由 `apiClient` 注入 `Authorization: Bearer <token>`；
+- 任何请求返回 **401** → 清凭据 + 跳登录页（`lib/auth.ts` 的 `notifyUnauthorized`，
+  1.5s 去抖，避免同页并发 401 触发多次跳转）；
+- 未登录直接访问控制台路由由 `App.tsx` 的 `RequireAuth` 拦下，不发无谓的请求。
+
+### 字段对齐（后端没有的不编造）
+
+| 位置 | 后端实际字段 | 前端处理 |
+| --- | --- | --- |
+| workflow 列表 | 只有 `model.Workflow`（无 `nodes`/`edges`，也没有 `node_count`/`edge_count`/`runs`/`success_rate`） | 为当前页每条拉一次 `GET /api/workflows/:id`，用真实 `nodes/edges` 长度填"节点数/连线数"、用 `position_x/y` 归一化出缩略图；`runs`/`success_rate` 后端根本没有 → UI 不再展示 |
+| task 列表 | `model.Task` 无 `duration_ms`、无 workflow 名、无 token 汇总 | 耗时 = `finished_at - started_at`；工作流名用 `GET /api/workflows` 建 id→name 映射后 join；token 列已移除 |
+| provider | 无 `latency_ms` | 延迟不展示（改为展示优先级 + 模型数） |
+| 用量 / 成本 | `/api/dashboard/usage` 只有 token 与调用次数，**没有计费字段** | 成本页改成"成本与用量"：只展示真实 token 用量与调用次数，费用/单价相关 UI 与文案全部去掉 |
+| 知识库文档 | 文档明细在 `GET /api/knowledge-bases/:id/documents`，列表接口不带 | 选中知识库后单独拉文档；检索命中的来源字段是 `filename`（不是 source） |
+| Agent 市场 | `installed_names` 是 `map[string]bool`（JSON 对象） | 转成名字数组后再判断"已安装" |
+| 模板 | 列表接口无 `node_count`/`used_count`；`categories` 只返回字符串数组 | 缺的统计字段隐藏；分类的 count 由模板列表本地统计 |
+
+凡是接口没给的数字，UI 一律隐藏或显示 `—`，不渲染 `undefined` / `NaN`，也不显示假数字。
+
+### 分页 / 过滤由前端兜底
+
+后端 `GET /api/tasks` 只接受 `limit`/`offset`（没有 `status`/`q`），
+`GET /api/workflows`、`GET /api/agents/marketplace` 也没有搜索参数：
+`src/api/index.ts` 一次多取（tasks 取 200 条）后在客户端过滤分页，
+所以"筛选/搜索"依然可用，只是以"后端全量返回"为前提。
+
+### SSE 实时事件流
+
+`src/api/sse.ts` 用 `fetch(url, { headers, signal })` + `response.body.getReader()`
+自己解析 SSE（原因见下文"为什么不能用 EventSource"）：
+
+- 按 `\n\n` 切帧，解析 `event:` / `data:`（多行 data 用 `\n` 拼接，`:` 开头是心跳注释）；
+- 事件名对齐 `internal/task/hub.go`：`snapshot`/`task_created`/`task_running`/
+  `task_waiting`/`task_completed`/`task_failed`/`task_cancelled`/`node_started`/
+  `node_completed`/`node_failed`/`node_waiting`/`node_skipped`/`node_cancelled`/
+  `token`/`log`/`fallback`/`tool_call`/`tool_result`；
+- 断线重连走**指数退避 + 抖动**（1s→2s→4s→8s→15s→30s 封顶），
+  不是每 3 秒无脑重连（后端 Hub 每用户并发 SSE 上限 10，重连风暴会把自己挡在门外）；
+- 终态（`succeeded`/`failed`/`cancelled`，含 snapshot 里的状态）后**停止重连**，
+  但保留 1s 宽限期把服务端已补发的 replay 帧读完 —— 否则点开一个跑完的任务，
+  事件流里只剩一行 snapshot，看不到 `node_started`/`node_completed` 的回放；
+- `close()` 会 abort 当前请求，`TaskDetail` 在卸载时调用。
+
+> **已知后端行为（前端无法规避，实测记录）**：`internal/task/hub.go` 的
+> `Subscribe` 会为新订阅者回放该任务最近 64 条事件，但 `unsub` 在
+> **最后一个订阅者离开时**会调用 `dropReplayLocked` 把回放缓冲删掉。
+> 于是同一个已完成任务：
+>
+> | 连接次序 | 实际收到的事件 |
+> | --- | --- |
+> | 第 1 个订阅者 | `snapshot` → `task_created` → `task_running` → `node_started`/`node_completed` ×3 → `task_completed`（10 帧） |
+> | 第 2 个订阅者（前者已断开） | 只有 `snapshot`（1 帧） |
+>
+> 也就是说"打开一个跑完的任务能看到它一步步怎么跑的"只在**首个**订阅者
+> 身上成立；第二个人只会看到快照。前端已经做的（1s 排空宽限期、按事件名
+> 渲染、终态停重连）都正确，缺的是后端把回放保留得更久一点
+> （例如按 TTL 而不是按"无人订阅"回收）。
 
 ---
 
@@ -216,13 +318,12 @@ EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
 
 ## 接入真实后端
 
-框架当前用 `src/lib/mock.ts` 的演示数据，页面只消费类型、不关心来源。
-接入步骤：
+**已完成**，接线状态与字段对齐见上文《真实 API 接线说明》。这里保留原始设计记录：
 
-1. **建 API 客户端**：在 `src/lib/` 下加 `api.ts`，封装 fetch + 注入 `Authorization`。
-2. **替换数据源**：把页面里的 `TASKS` / `WORKFLOWS` 等常量换成 `useEffect` + `useState`
-   或引入 TanStack Query；类型定义可直接复用 `mock.ts` 里已导出的 interface。
-3. **SSE 实时流**：`TaskDetail` 的事件流当前由 `buildEvents()` 模拟。
+1. **API 客户端**：`src/api/client.ts`（fetch + 超时 + token 注入 + 401 处理 + camelCase 转换）。
+2. **数据源**：`src/api/index.ts`（真实实现）/ `src/api/mock-api.ts`（演示数据），
+   由 `VITE_USE_MOCK` 选择，页面只 `import { api } from "@/api"`。
+3. **SSE 实时流**：见 `src/api/sse.ts`。
 
    ⚠️ **不要用 `new EventSource(...)`**：浏览器的 `EventSource` 无法设置请求头，
    而后端 `/api/tasks/:id/stream` 挂在 `authMiddleware` 之后
@@ -230,12 +331,9 @@ EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
    缺 `Authorization: Bearer` 一律 401。更糟的是 `EventSource` 会每 ~3s 自动重连，
    单个用户默认限流 120 req/min，开两个详情页就能把该用户所有 API 拖进 429。
 
-   可行做法（后端协议不变）：`fetch(url, { headers: { Authorization: \`Bearer \${token}\` }, signal })`
-   + `response.body.getReader()`，自己按 `\n\n` 切分 SSE 帧、解析 `event:` / `data:` 行；
-   另一种是与后端约定一次性 ticket 走 query 参数，但那需要后端配合。
-
-   事件结构已对齐后端（`task_created` / `node_started` / `node_completed` / `token`）。
-4. **登录**：`src/lib/session.ts` 的 `login()` 换成调用 `/api/auth/login` 并存 token。
+   实现方式（后端协议未改动）：`fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal })`
+   + `response.body.getReader()`，自己按 `\n\n` 切分 SSE 帧、解析 `event:` / `data:` 行。
+4. **登录**：`src/lib/session.ts` 调 `/api/auth/login`、`/api/auth/register`，token 落到 `nf-token`。
 
 ### 迁移到主应用
 

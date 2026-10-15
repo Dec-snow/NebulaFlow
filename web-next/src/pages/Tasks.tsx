@@ -18,6 +18,12 @@ import { fmtDuration, numberOrNull, timeAgo } from "@/lib/utils";
 
 type Filter = "all" | "running" | "succeeded" | "failed";
 
+/**
+ * 后端 `GET /api/tasks?limit=&offset=` **不支持** status / q 过滤，
+ * 所以这里多取一些记录（api 层固定拉 200 条）后在客户端过滤 / 分页。
+ */
+const PAGE_SIZE = 100;
+
 export default function Tasks() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<Filter>("all");
@@ -29,6 +35,7 @@ export default function Tasks() {
       api.tasks.list({
         status: filter === "all" ? undefined : filter,
         q: debouncedQ || undefined,
+        pageSize: PAGE_SIZE,
       }),
     [filter, debouncedQ],
   );
@@ -37,13 +44,12 @@ export default function Tasks() {
   const list = Array.isArray(data?.items) ? data.items : [];
   const total = numberOrNull(data?.total) ?? 0;
 
-  // 各状态数量（基于当前页数据近似）
-  const pageList = list;
+  // 各状态数量（基于当前拉取到的记录）
   const counts = {
     all: total,
-    running: pageList.filter((t) => t.status === "running").length,
-    succeeded: pageList.filter((t) => t.status === "succeeded").length,
-    failed: pageList.filter((t) => t.status === "failed").length,
+    running: list.filter((t) => t.status === "running").length,
+    succeeded: list.filter((t) => t.status === "succeeded").length,
+    failed: list.filter((t) => t.status === "failed").length,
   };
 
   if (loading) return <PageLoader text="加载任务列表…" />;
@@ -115,16 +121,12 @@ export default function Tasks() {
                 <th>工作流</th>
                 <th className="w-28">状态</th>
                 <th className="w-24 text-right">耗时</th>
-                <th className="w-24 text-right">Token</th>
                 <th className="w-28">开始时间</th>
                 <th className="w-10" />
               </tr>
             </thead>
             <tbody>
-              {list.map((t) => {
-                // tokens 不是后端 task 的字段（只在 task_node 上有），缺失时保持原来的 "—" 语义
-                const tokens = numberOrNull(t.tokens);
-                return (
+              {list.map((t) => (
                 <tr
                   key={t.id}
                   onClick={() => navigate(`/tasks/${t.id}`)}
@@ -140,17 +142,15 @@ export default function Tasks() {
                     {/* 摘要宽度跟着列宽走：max-w-md(448px) 会让 600px 宽的列右侧空出一大块，
                         放宽到 560px 后长输入也能充分利用横向空间。truncate 保留省略号兜底。 */}
                     <div className="mt-0.5 max-w-[560px] truncate text-2xs text-fg-subtle">
-                      {t.input}
+                      {t.input || t.error || "—"}
                     </div>
                   </td>
                   <td>
                     <StatusBadge status={t.status} />
                   </td>
+                  {/* 耗时由 api 层用 finished_at - started_at 算出；未跑完时为 "—" */}
                   <td className="tnum text-right text-xs">
                     {fmtDuration(t.durationMs)}
-                  </td>
-                  <td className="tnum text-right text-xs">
-                    {tokens !== null && tokens > 0 ? tokens.toLocaleString() : "—"}
                   </td>
                   <td className="text-2xs text-fg-subtle">
                     {timeAgo(t.startedAt)}
@@ -162,8 +162,7 @@ export default function Tasks() {
                     />
                   </td>
                 </tr>
-                );
-              })}
+              ))}
             </tbody>
           </table>
         </div>

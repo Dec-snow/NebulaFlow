@@ -1,9 +1,19 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowRight, GitBranch, Lock, ShieldCheck, Sparkles, User, Zap } from "lucide-react";
-import { Button, Field, Input } from "@/components/ui";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  ArrowRight,
+  GitBranch,
+  Lock,
+  Mail,
+  ShieldCheck,
+  Sparkles,
+  User,
+  Zap,
+} from "lucide-react";
+import { Button, Field, Input, Segmented } from "@/components/ui";
 import { BrandMark } from "@/components/shell/Brand";
 import { ThemeToggle } from "@/components/shell/ThemeToggle";
+import { USE_MOCK } from "@/api";
 import { useSession } from "@/lib/session";
 
 const FEATURES = [
@@ -12,16 +22,62 @@ const FEATURES = [
   { icon: ShieldCheck, title: "可靠投递", desc: "Consumer Group + 崩溃认领 + 延迟重投 + DLQ" },
 ];
 
+type Mode = "login" | "register";
+
+/** 后端错误码 → 用户能看懂的文案（未知错误原样透出，方便排查）。 */
+function humanizeError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes("invalid credentials") || m.includes("unauthorized")) {
+    return "用户名或密码不正确";
+  }
+  if (m.includes("already exists") || m.includes("duplicate")) {
+    return "用户名或邮箱已被注册";
+  }
+  if (m.includes("rate limit") || m.includes("too many")) {
+    return "尝试过于频繁，请稍后再试";
+  }
+  return message || "请求失败，请重试";
+}
+
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const login = useSession((s) => s.login);
-  const [username, setUsername] = useState("demo");
-  const [password, setPassword] = useState("demo123456");
+  const register = useSession((s) => s.register);
 
-  const submit = (e: React.FormEvent) => {
+  const [mode, setMode] = useState<Mode>("login");
+  const [username, setUsername] = useState(USE_MOCK ? "demo" : "");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState(USE_MOCK ? "demo123456" : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const from = (location.state as { from?: string } | null)?.from ?? "/";
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    login(username.trim() || "demo");
-    navigate("/");
+    if (busy) return;
+    const name = username.trim();
+    if (!name || !password) {
+      setError("请填写用户名与密码");
+      return;
+    }
+    if (mode === "register" && !email.trim()) {
+      setError("注册需要填写邮箱");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "login") await login(name, password);
+      else await register({ username: name, email: email.trim(), password });
+      navigate(from, { replace: true });
+    } catch (err) {
+      setError(humanizeError((err as Error)?.message ?? ""));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -81,12 +137,30 @@ export default function Login() {
             <BrandMark size={36} />
           </div>
 
-          <h2 className="text-xl font-semibold tracking-tight text-fg">欢迎回来</h2>
+          <h2 className="text-xl font-semibold tracking-tight text-fg">
+            {mode === "login" ? "登录控制台" : "创建账号"}
+          </h2>
           <p className="mt-1.5 text-xs text-fg-subtle">
-            使用演示账号直接进入，或输入任意用户名体验
+            {mode === "login"
+              ? "使用你的 NebulaFlow 账号登录"
+              : "注册后即可编排工作流并提交任务"}
           </p>
 
-          <div className="mt-7 space-y-4">
+          <div className="mt-6">
+            <Segmented
+              value={mode}
+              onChange={(v) => {
+                setMode(v as Mode);
+                setError(null);
+              }}
+              options={[
+                { value: "login", label: "登录" },
+                { value: "register", label: "注册" },
+              ]}
+            />
+          </div>
+
+          <div className="mt-5 space-y-4">
             <Field label="用户名">
               <div className="relative">
                 <User
@@ -96,12 +170,31 @@ export default function Login() {
                 <Input
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="demo"
+                  placeholder="用户名（3–32 字符）"
                   className="pl-9"
                   autoComplete="username"
                 />
               </div>
             </Field>
+
+            {mode === "register" && (
+              <Field label="邮箱">
+                <div className="relative">
+                  <Mail
+                    size={15}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+                  />
+                  <Input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="pl-9"
+                    autoComplete="email"
+                  />
+                </div>
+              </Field>
+            )}
 
             <Field label="密码">
               <div className="relative">
@@ -113,28 +206,39 @@ export default function Login() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="至少 6 位"
                   className="pl-9"
-                  autoComplete="current-password"
+                  autoComplete={mode === "login" ? "current-password" : "new-password"}
                 />
               </div>
             </Field>
           </div>
+
+          {error && (
+            <div className="mt-4 rounded-lg border border-rose/30 bg-rose/10 px-3.5 py-2.5 text-xs text-rose">
+              {error}
+            </div>
+          )}
 
           <Button
             type="submit"
             variant="brand"
             block
             className="mt-6"
+            disabled={busy}
             trailing={<ArrowRight size={15} />}
           >
-            进入控制台
+            {busy ? "处理中…" : mode === "login" ? "进入控制台" : "注册并进入"}
           </Button>
 
           <div className="mt-6 rounded-lg border border-line bg-surface-2/60 px-3.5 py-3">
-            <div className="text-2xs font-medium text-fg-muted">演示账号</div>
+            <div className="text-2xs font-medium text-fg-muted">
+              {USE_MOCK ? "演示模式（VITE_USE_MOCK=true）" : "真实后端"}
+            </div>
             <div className="mt-1 font-mono text-2xs text-fg-subtle">
-              demo / demo123456
+              {USE_MOCK
+                ? "demo / demo123456"
+                : "调用 POST /api/auth/login · 首个注册用户为 admin"}
             </div>
           </div>
         </form>

@@ -2,18 +2,24 @@
  * API 客户端基类。
  *
  * 封装统一的 fetch 行为：
+ * - baseURL（默认同源，即由 Go 进程托管 dist 的单端口形态）
  * - 超时控制
- * - token 注入预留（当前为 mock 阶段，接入真实后端时启用）
- * - 统一错误处理
+ * - token 注入：所有请求带 `Authorization: Bearer <token>`
+ * - 401 统一处理：清理会话并跳转登录页（由 lib/auth 注册的 handler 完成）
+ * - 统一错误处理（ApiError）
  *
- * 设计为轻量封装，不引入 axios 等第三方依赖。
- * 接入真实后端时，把 api/index.ts 中的 mock 实现替换为调用本客户端即可。
+ * SSE 不走这里：浏览器 EventSource 无法设置请求头，改用 fetch+reader
+ * 的实现在 `src/api/sse.ts`，这里只导出它需要的 `authHeaders()`。
  */
+
+import { getToken, notifyUnauthorized } from "@/lib/auth";
+import { API_BASE_URL } from "./config";
+import { camelizeKeys, joinUrl } from "./transform";
 
 export interface ApiClientOptions {
   baseURL?: string;
   timeout?: number;
-  /** 获取 token 的函数，接入真实后端时注入 */
+  /** 获取 token 的函数，默认从 localStorage（nf-token）读取 */
   getToken?: () => string | null;
 }
 
@@ -22,6 +28,8 @@ export interface RequestOptions extends RequestInit {
   timeout?: number;
   /** 是否需要认证（自动注入 token） */
   auth?: boolean;
+  /** 响应体不做 snake_case → camelCase 转换（默认会转） */
+  raw?: boolean;
 }
 
 export class ApiError extends Error {
@@ -38,15 +46,25 @@ export class ApiError extends Error {
 
 const DEFAULT_TIMEOUT = 15_000;
 
+/**
+ * 认证请求头。SSE 客户端需要自己拼 fetch 请求头，所以抽出来复用。
+ */
+export function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...(extra ?? {}) };
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
 export class ApiClient {
   private baseURL: string;
   private timeout: number;
   private getToken?: () => string | null;
 
   constructor(options: ApiClientOptions = {}) {
-    this.baseURL = options.baseURL ?? import.meta.env.VITE_API_BASE_URL ?? "";
+    this.baseURL = options.baseURL ?? API_BASE_URL;
     this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
-    this.getToken = options.getToken;
+    this.getToken = options.getToken ?? getToken;
   }
 
   /**
@@ -62,32 +80,35 @@ export class ApiClient {
       timeout = this.timeout,
       auth = true,
       headers: customHeaders,
+      raw = false,
       ...rest
     } = options;
 
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       ...(customHeaders as Record<string, string>),
     };
-
-    // token 注入预留：接入真实后端时启用
-    if (auth && this.getToken) {
-      const token = this.getToken();
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      }
+    // FormData 由浏览器自己带 boundary，不要覆盖 Content-Type
+    if (!(rest.body instanceof FormData) && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
     }
 
-    const url = this.buildURL(path);
+    if (auth && this.getToken) {
+      const token = this.getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const url = joinUrl(this.baseURL, path);
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeout);
 
     try {
-      const response = await fetch(url, {
-        ...rest,
-        headers,
-        signal: controller.signal,
-      });
+      const response = await fetch(url, { ...rest, headers, signal: controller.signal });
+
+      if (response.status === 401) {
+        // 会话失效：清 token 并跳登录页（handler 由 App 注册）
+        notifyUnauthorized();
+        throw new ApiError("登录状态已失效，请重新登录", 401);
+      }
 
       const data = await this.parseResponse(response);
 
@@ -99,7 +120,7 @@ export class ApiClient {
         );
       }
 
-      return data as T;
+      return (raw ? data : camelizeKeys<T>(data)) as T;
     } catch (err) {
       if (err instanceof ApiError) throw err;
       if ((err as Error).name === "AbortError") {
@@ -111,17 +132,15 @@ export class ApiClient {
     }
   }
 
-  private buildURL(path: string): string {
-    if (/^https?:\/\//.test(path)) return path;
-    const base = this.baseURL.replace(/\/$/, "");
-    const p = path.replace(/^\//, "");
-    return `${base}/${p}`;
-  }
-
   private async parseResponse(response: Response): Promise<unknown> {
+    if (response.status === 204) return null;
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      return response.json();
+      try {
+        return await response.json();
+      } catch {
+        return null;
+      }
     }
     return response.text();
   }
@@ -135,7 +154,7 @@ export class ApiClient {
     return this.request<T>(path, {
       ...options,
       method: "POST",
-      body: body ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   }
 
@@ -143,7 +162,7 @@ export class ApiClient {
     return this.request<T>(path, {
       ...options,
       method: "PUT",
-      body: body ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   }
 
@@ -152,8 +171,5 @@ export class ApiClient {
   }
 }
 
-/**
- * 默认客户端实例（单例）。
- * 当前为 mock 阶段，baseURL 为空；接入真实后端时在 main.tsx 初始化。
- */
+/** 默认客户端实例（单例）。baseURL 默认同源。 */
 export const apiClient = new ApiClient();

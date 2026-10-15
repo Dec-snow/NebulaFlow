@@ -7,9 +7,11 @@ import {
   ConfirmDialog,
   EmptyState,
   ErrorState,
+  Field,
   Input,
   PageLoader,
   Segmented,
+  Select,
   StatusBadge,
   ToastContainer,
   useToast,
@@ -114,6 +116,15 @@ export default function Agents() {
   const { toasts, toast } = useToast();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    runtimeType: "native" as AgentRuntimeType,
+    endpoint: "",
+    capabilities: "",
+  });
 
   const { data, loading, error, refresh } = useFetch(
     () => api.agents.list({ runtimeType: filter === "all" ? undefined : filter, q: debouncedQ }),
@@ -140,19 +151,58 @@ export default function Agents() {
   const handleConfirmDelete = async () => {
     if (deleteId == null) return;
     try {
-      await api.agents.delete(deleteId);
+      await api.agents.remove(deleteId);
       toast("删除成功", "success");
       setConfirmOpen(false);
       setDeleteId(null);
       refresh();
     } catch (e) {
-      toast("删除失败，请重试", "error");
+      toast(`删除失败：${(e as Error).message}`, "error");
     }
   };
 
+  /** 真实健康检查：GET /api/agents/:id/health */
   const handleTest = async (id: number) => {
-    // 简单模拟：打印日志并刷新
-    console.log("[agents] test connection", id);
+    try {
+      const health = await api.agents.health(id);
+      toast(
+        health.healthy ? `Agent #${id} 健康` : `Agent #${id} 异常${health.error ? `：${health.error}` : ""}`,
+        health.healthy ? "success" : "error",
+      );
+    } catch (e) {
+      toast(`健康检查失败：${(e as Error).message}`, "error");
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!form.name.trim()) {
+      toast("请填写 Agent 名称", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.agents.create({
+        name: form.name.trim(),
+        description: form.description.trim(),
+        runtimeType: form.runtimeType,
+        endpoint: form.endpoint.trim() || undefined,
+        capabilities: form.capabilities
+          .split(",")
+          .map((c) => c.trim())
+          .filter(Boolean),
+        version: "0.1.0",
+        status: "active",
+        timeoutSec: 60,
+      });
+      toast("Agent 已注册", "success");
+      setCreating(false);
+      setForm({ name: "", description: "", runtimeType: "native", endpoint: "", capabilities: "" });
+      refresh();
+    } catch (e) {
+      toast(`注册失败：${(e as Error).message}`, "error");
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (loading) {
@@ -175,10 +225,66 @@ export default function Agents() {
             共 {data?.total ?? 0} 个 Agent · 支持 Native / LangChain / HTTP 三种运行时
           </p>
         </div>
-        <Button variant="brand" icon={<Plus size={15} />}>
+        <Button variant="brand" icon={<Plus size={15} />} onClick={() => setCreating((v) => !v)}>
           新建 Agent
         </Button>
       </div>
+
+      {creating && (
+        <Card>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="名称">
+              <Input
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="research-assistant"
+              />
+            </Field>
+            <Field label="Runtime">
+              <Select
+                value={form.runtimeType}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, runtimeType: e.target.value as AgentRuntimeType }))
+                }
+              >
+                <option value="native">Native（自研 Agent）</option>
+                <option value="langchain">LangChain（LangServe HTTP）</option>
+                <option value="http">HTTP（通用 HTTP Agent）</option>
+              </Select>
+            </Field>
+            <Field label="描述（可选）">
+              <Input
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="这个 Agent 负责什么"
+              />
+            </Field>
+            <Field label="Endpoint（native 可留空）">
+              <Input
+                value={form.endpoint}
+                onChange={(e) => setForm((f) => ({ ...f, endpoint: e.target.value }))}
+                placeholder="https://agent.internal.example.com"
+              />
+            </Field>
+            <Field label="能力标签（逗号分隔，可选）">
+              <Input
+                value={form.capabilities}
+                onChange={(e) => setForm((f) => ({ ...f, capabilities: e.target.value }))}
+                placeholder="tool_call, rag"
+              />
+            </Field>
+          </div>
+          <div className="mt-4 flex items-center gap-2">
+            <Button variant="brand" size="sm" onClick={handleCreate} disabled={busy}>
+              {busy ? "提交中…" : "注册 Agent"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+              取消
+            </Button>
+            <span className="text-2xs text-fg-subtle">POST /api/agents</span>
+          </div>
+        </Card>
+      )}
 
       {/* 过滤条 */}
       <div className="flex flex-wrap items-center gap-3">
