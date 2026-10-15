@@ -426,8 +426,16 @@ make secret                        # 生成一个可用的密钥
 ```bash
 docker compose exec app nebulaflow-seed   # 或：go run ./cmd/seed
 # 演示账号：demo / demo123456
-# 幂等：重复执行会复用已有用户 / Provider / 知识库 / 工作流，并自愈 RAG 绑定与向量维度
+# 幂等：重复执行会复用已有用户 / Provider / 知识库 / 工作流 / 系统模板 / 系统 Agent，
+#       并自愈 RAG 绑定与向量维度
+# 退出码：系统模板或系统 Agent 有任意一条写不进去 → 非零退出（不再静默漏写）
 ```
+
+> **系统模板在库里的形态是 `workflows.user_id IS NULL`**（"不属于任何用户"），
+> Go 侧统一用 `model.SystemTemplateUserID = 0` 这个哨兵值读写，由 `store` 层在边界做
+> 0 ↔ NULL 翻译。直接写 0 是**错的**：`workflows.user_id` 外键指向 `users(id)`，
+> 而 `users.id` 由 `BIGSERIAL` 生成、永远从 1 开始，FK 会拒绝
+> （`SQLSTATE 23503 workflows_user_id_fkey`）—— 这正是线上模板市场长期为空数组的根因。
 
 ### 生产部署（nebula.hoarfrost.cloud）
 
@@ -459,7 +467,11 @@ systemd 常驻的 Go 进程 + Docker 里的 PostgreSQL(pgvector) / Redis。
 2. 装二进制 + systemd 单元，重启后端，等 `http://127.0.0.1:18080/healthz` 返回 200；
 3. 换 nginx 配置并 `nginx -t && nginx -s reload`，再从**公网入口**断言
    `/healthz` 是 200、`/api/workflows`（无 token）是 **401 且 `content-type: application/json`**；
-4. 以上全过才解压新前端、原子切软链，最后复验首页。
+4. 以上全过才解压新前端、原子切软链，最后复验首页；
+5. **每次部署都跑一遍 `nebulaflow-seed`**（幂等，失败只告警不阻断）。系统模板与系统 Agent
+   属于"系统级种子数据"，只在首次部署跑会让**后来新增的系统级数据永远补不上**——
+   线上模板市场为空就是这么来的：首次部署时 seed 把 5 个系统模板全写失败，旧脚本随即
+   打下 `.seeded` 标记，之后每次部署都跳过。`.seeded` 现在只记录"最近一次 seed 成功时间"。
 
 任何一步失败即中断，线上停留在上一版可用状态。
 
