@@ -81,6 +81,17 @@ jobs:
 
       - name: Frontend build
         working-directory: web-next
+        # 部署目标（nebula.hoarfrost.cloud）是**纯静态展示站**：那台服务器上没有 Go 后端，
+        # 且 deploy/nebula.conf 只做静态托管（没有 /api 反代 —— 实测 /api/* 会回落到 index.html、
+        # POST /api/auth/login 返回 nginx 405）。所以线上刻意以 mock 模式构建，保证演示站始终可浏览。
+        #
+        # 想让线上跑真实 API，先满足两件事（详见 PR #2 的“部署注意”）：
+        #   1. 在服务器上跑后端（docker compose 的 app 服务，或直接跑二进制，默认 :8080）；
+        #   2. 给 deploy/nebula.conf 加 location /api/ 反代，可直接抄 web-next/nginx.conf，
+        #      注意其中 SSE 的三行：proxy_http_version 1.1 / proxy_set_header Connection "" / proxy_buffering off。
+        # 两者就绪后，把下面的 VITE_USE_MOCK 删掉即可切回真实 API。
+        env:
+          VITE_USE_MOCK: "true"
         run: |
           npm ci
           npm run build
