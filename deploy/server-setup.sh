@@ -9,7 +9,8 @@
 #   2. 二进制：把 staging 里的 linux/amd64 二进制装到 /opt/nebulaflow/bin（原子替换）
 #   3. 配置：/opt/nebulaflow/.env 不存在则生成（含随机密钥），存在则**只补缺失的键**
 #   4. 服务：装 systemd unit → daemon-reload → enable → restart → 等 /healthz 200
-#   5. 演示数据：只在第一次（.seeded 不存在）跑 nebulaflow-seed，失败只告警不阻断
+#   5. 演示数据：**每次部署**都跑一遍 nebulaflow-seed（幂等），失败只告警不阻断；
+#      .seeded 只是"最近一次 seed 成功时间"的标记，不再决定是否执行
 #
 # 顺序的理由：数据库必须先于进程就绪（否则进程连不上库直接退出），
 # 进程必须先于 nginx reload（否则 nginx 会把 /api 反代到一个连接被拒的端口），
@@ -342,21 +343,29 @@ compose ps || true
 log "systemctl is-active nebulaflow: $(run_root systemctl is-active nebulaflow 2>/dev/null || true)"
 log "binary: $(run_root stat -c '%y  %s bytes' "$BIN_DIR/nebulaflow-server")"
 
-# ---------- 5. 演示数据（只跑一次；失败只告警） ----------
-# 为什么失败不阻断：seed 只影响"演示账号能不能直接登录"。
-# 让一次失败把整个部署回退、连带前端切不回去，代价远大于收益 ——
-# 而且 /api/auth/register 依然可用，观众可以自己注册。
+# ---------- 5. 演示数据（每次部署都跑一遍；失败只告警不阻断） ----------
+# 为什么必须**每次都跑**：seed 全流程幂等（用户/Provider/知识库/示例工作流/
+# 系统模板/系统 Agent 全部按名字复用），而"只在首次跑"会让**之后新增的系统级
+# 种子数据永远补不上** —— 线上模板市场为空就是这么来的：首次部署时 seed 把
+# 5 个系统模板都写失败（user_id=0 被 workflows 的外键拒绝，SQLSTATE 23503），
+# 旧脚本随即打下 .seeded 标记，之后每次部署都直接跳过，故障被永久固化。
+# 代价只是一次连库 + 若干 SELECT，比"线上少半个功能"便宜得多。
+#
+# 失败不阻断的理由不变：seed 只影响演示内容；让一次失败把整个部署回退
+# （连带前端切不回去）代价远大于收益，而且 /api/auth/register 依然可用。
 if [ -f "$SEED_MARKER" ]; then
-  log "seed 已执行过（$SEED_MARKER 存在），跳过"
+  log "seed 上次成功于 $(run_root stat -c '%y' "$SEED_MARKER" 2>/dev/null || echo unknown)（仍会重跑，seed 幂等）"
+fi
+log "执行 nebulaflow-seed（demo/demo123456 + 示例工作流/知识库 + 系统模板 + 系统 Agent）"
+if run_root bash -c "set -a; . '$ENV_FILE'; set +a; '$BIN_DIR/nebulaflow-seed'"; then
+  # 标记只表示"最近一次成功"，不再用于决定是否执行
+  run_root touch "$SEED_MARKER"
+  log "seed ok（系统模板已就位，可用 curl -H 'Authorization: Bearer <token>' .../api/templates 复核非空）"
 else
-  log "首次部署：执行 nebulaflow-seed（demo/demo123456 + 示例工作流/知识库，本身幂等）"
-  if run_root bash -c "set -a; . '$ENV_FILE'; set +a; '$BIN_DIR/nebulaflow-seed'"; then
-    run_root touch "$SEED_MARKER"
-    log "seed ok"
-  else
-    warn "seed 失败 —— 部署继续（演示账号可能不存在，可用 POST /api/auth/register 注册）。
-    手动重试：set -a; . $ENV_FILE; set +a; $BIN_DIR/nebulaflow-seed"
-  fi
+  warn "seed 失败 —— 部署继续（演示账号/系统模板/系统 Agent 可能缺失，可用 POST /api/auth/register 注册账号）。
+    手动重试：set -a; . $ENV_FILE; set +a; $BIN_DIR/nebulaflow-seed
+    注意：新版本 seed 在系统模板或系统 Agent 写不进去时会以非零退出码失败，
+    这正是为了不再出现"退出码 0 但线上模板市场是空的"这种静默故障。"
 fi
 
 log "server setup ok"
