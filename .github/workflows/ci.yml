@@ -261,24 +261,49 @@ jobs:
             # 公网入口断言。为什么必须经公网而不是只看 127.0.0.1:18080：
             # 后端能起不代表 nginx 的反代对了（location 写错、reload 没生效、
             # 别处的 vhost 抢了 server_name 都会让本机探测一路绿灯而对外全 404）。
+            #
+            # ⚠ 两个必须同时成立的条件，缺一条这个断言就是假的：
+            #   1. **响应体要是 JSON**。只看状态码会骗人：旧 worker 还在跑的时候
+            #      /healthz 会落到 `location /` 的 index.html 回落上 —— 同样是 200，
+            #      content-type 却是 text/html。（第一次 CI 就是被这个骗过去的：
+            #      /healthz"通过"了，紧接着 /api/workflows 返回 200 HTML 才暴露出来。）
+            #   2. **要重试**。`nginx -s reload` 立刻返回，旧 worker 处理完手头连接
+            #      才退出，紧接着的请求可能仍落到用旧配置的 worker 上。
+            #      真正的配置错误会一直失败，不会被这几十秒的重试掩盖。
             echo "[deploy] --- public checks ---"
-            # 为什么重试而不是一次定生死：`nginx -s reload` 是立刻返回的，
-            # 旧 worker 要把手头连接处理完才退出，紧接着那一次请求仍可能落到
-            # 还在用**旧配置**的 worker 上（本地 dry-run 时实测见过一次 /healthz 502）。
-            # 真正的"反代配错"会一直失败，不会被这十来秒的重试掩盖。
-            code=""
-            for i in $(seq 1 10); do
-              code=$(curl -sS -m 15 -o /tmp/nf-health.txt -w '%{http_code}' "$BASE_URL/healthz" 2>/dev/null || echo "000")
-              [ "$code" = "200" ] && break
-              echo "[deploy] /healthz -> $code，2s 后重试（第 $i 次）"
+            healthz_ok=""
+            for i in $(seq 1 15); do
+              code=$(curl -sS -m 15 -D /tmp/nf-health.h -o /tmp/nf-health.txt -w '%{http_code}' "$BASE_URL/healthz" 2>/dev/null || echo "000")
+              ct=$(grep -i '^content-type:' /tmp/nf-health.h 2>/dev/null | tr -d '\r' | head -1 || true)
+              if [ "$code" = "200" ] && printf '%s' "$ct" | grep -qi 'application/json'; then
+                healthz_ok=1
+                break
+              fi
+              echo "[deploy] /healthz -> $code ${ct:-<无 content-type>}，2s 后重试（第 $i 次）"
               sleep 2
             done
-            [ "$code" = "200" ] || { echo "body:"; cat /tmp/nf-health.txt; fail "$BASE_URL/healthz 期望 200，实际 $code"; }
-            echo "[deploy] GET /healthz -> 200  $(head -c 200 /tmp/nf-health.txt)"
+            if [ -z "$healthz_ok" ]; then
+              echo "--- headers ---"; cat /tmp/nf-health.h 2>/dev/null || true
+              echo "--- body ---"; head -c 400 /tmp/nf-health.txt 2>/dev/null || true
+              fail "$BASE_URL/healthz 期望 200 且 content-type 为 application/json（拿到 HTML 说明请求没走到后端）"
+            fi
+            echo "[deploy] GET /healthz -> 200 $ct  $(head -c 200 /tmp/nf-health.txt)"
 
-            code=$(curl -sS -m 15 -D /tmp/nf-wf.h -o /tmp/nf-wf.json -w '%{http_code}' "$BASE_URL/api/workflows" 2>/dev/null || echo "000")
-            [ "$code" = "401" ] || { echo "body:"; head -c 400 /tmp/nf-wf.json; fail "$BASE_URL/api/workflows 期望 401（无 token），实际 $code"; }
-            grep -qi '^content-type: application/json' /tmp/nf-wf.h || { cat /tmp/nf-wf.h; fail "/api/workflows 返回的不是 JSON（是不是落回了静态站？）"; }
+            api_ok=""
+            for i in $(seq 1 15); do
+              code=$(curl -sS -m 15 -D /tmp/nf-wf.h -o /tmp/nf-wf.json -w '%{http_code}' "$BASE_URL/api/workflows" 2>/dev/null || echo "000")
+              if [ "$code" = "401" ] && grep -qi '^content-type: application/json' /tmp/nf-wf.h; then
+                api_ok=1
+                break
+              fi
+              echo "[deploy] /api/workflows -> $code，2s 后重试（第 $i 次）"
+              sleep 2
+            done
+            if [ -z "$api_ok" ]; then
+              echo "--- headers ---"; cat /tmp/nf-wf.h 2>/dev/null || true
+              echo "--- body（前 400 字节）---"; head -c 400 /tmp/nf-wf.json 2>/dev/null || true
+              fail "$BASE_URL/api/workflows 期望 401 + application/json（实际 $code）—— 是不是落回了静态站？"
+            fi
             head -c 1 /tmp/nf-wf.json | grep -q '{' || { head -c 200 /tmp/nf-wf.json; fail "/api/workflows 的响应体不是 JSON 对象"; }
             echo "[deploy] GET /api/workflows (no token) -> 401 JSON  $(head -c 200 /tmp/nf-wf.json)"
 
