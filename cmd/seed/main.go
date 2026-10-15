@@ -72,6 +72,31 @@ func main() {
 		log.Printf("created user demo (id=%d, password=demo123456)", u.ID)
 	}
 
+	// 1b. admin 引导：保证库里至少有一个 admin
+	//
+	// 为什么需要它：POST/PUT/DELETE /api/providers 是 admin-only（Provider 是系统级
+	// 配置），而"第一个注册用户自动成为 admin"这条规则在**先跑过 seed 的库**上永远
+	// 不会触发（注册时 users 表里已经有 demo）。于是全新部署的库可能一个 admin 都
+	// 没有，想通过 API 配一个真实模型 Provider 直接是 403 insufficient permission ——
+	// 功能存在但不可达。
+	//
+	// 规则刻意收得很紧：只在"库里确实没有任何 admin"时把 demo 提升为 admin；
+	// 只要已有 admin，就绝不改动任何角色（幂等、可重复执行）。
+	var adminCount int64
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM users WHERE role = $1`, model.RoleAdmin).Scan(&adminCount); err != nil {
+		log.Fatalf("count admins: %v", err)
+	}
+	if want := demoRoleFor(adminCount, u.Role); want != u.Role {
+		if err := st.Users.SetUserRole(ctx, u.ID, want); err != nil {
+			log.Fatalf("set demo role to %s: %v", want, err)
+		}
+		log.Printf("数据库里没有任何 admin：把 %q 提升为 %s（provider 配置接口是 admin-only）", u.Username, want)
+		u.Role = want
+	} else {
+		log.Printf("admin bootstrap: 已有 %d 个 admin，%q 保持角色 %q", adminCount, u.Username, u.Role)
+	}
+
 	// 2. LLM Provider：mock（离线）+ deepseek（可选）
 	mock := &model.LLMProvider{Name: "mock", BaseURL: "http://localhost:1", Enabled: true, Priority: 10}
 	_ = st.Providers.UpsertProvider(ctx, mock)
@@ -239,6 +264,18 @@ func main() {
 	if len(seedErrs) > 0 {
 		log.Fatalf("seed 未完全成功:\n  - %s", strings.Join(seedErrs, "\n  - "))
 	}
+}
+
+// demoRoleFor 决定 seed 跑完之后 demo 应有的角色。
+//
+// 抽成纯函数是为了让"只在没有任何 admin 时才提升"这条规则可以被直接断言：
+// 有 admin → 原样返回（不夺权、不重置别人手工调过的角色）；
+// 没有 admin → 提升为 admin（否则 admin-only 的 provider 配置接口不可达）。
+func demoRoleFor(adminCount int64, currentRole string) string {
+	if adminCount == 0 && currentRole != model.RoleAdmin {
+		return model.RoleAdmin
+	}
+	return currentRole
 }
 
 // seedTemplates 初始化系统模板（幂等：按"系统归属 + 名称"检查是否已存在）。
