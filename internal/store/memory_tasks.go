@@ -58,8 +58,14 @@ func (r *memTaskRepo) ListTasks(_ context.Context, userID int64, limit, offset i
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if limit <= 0 || limit > 100 {
+	// limit 语义（P3-18）：未指定/非正数 → 默认 20；超出上限 → **钳到 100**，
+	// 而不是静默重置为 20 —— 「要太多」和「没说要多少」是两种不同的请求，
+	// 压测工具曾因被静默重置而只统计到 20 条任务。
+	switch {
+	case limit <= 0:
 		limit = 20
+	case limit > 100:
+		limit = 100
 	}
 	if offset < 0 {
 		offset = 0

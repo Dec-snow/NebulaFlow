@@ -117,6 +117,8 @@ func (s *Server) Router() *gin.Engine {
 	r.Use(tracingMiddleware(s.tracing, s.auth))
 	r.Use(corsMiddleware(cfg.CORSOrigins))
 	r.Use(metricsMiddleware(s.metrics))
+	// 访问日志放在认证之后：这样日志里能带上 user id（P1-9）。
+	r.Use(accessLogMiddleware())
 
 	// 健康检查与指标
 	r.GET("/healthz", func(c *gin.Context) {

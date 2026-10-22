@@ -73,8 +73,12 @@ func (r *TaskRepo) GetTaskByID(ctx context.Context, id int64) (*model.Task, erro
 }
 
 func (r *TaskRepo) ListTasks(ctx context.Context, userID int64, limit, offset int) ([]model.Task, error) {
-	if limit <= 0 || limit > 100 {
+	// limit 语义与内存版一致（P3-18）：非正数 → 默认 20；超上限 → 钳到 100。
+	switch {
+	case limit <= 0:
 		limit = 20
+	case limit > 100:
+		limit = 100
 	}
 	rows, err := r.db.Pool.Query(ctx,
 		`SELECT id, workflow_id, user_id, status, priority, input, output, error, started_at, finished_at, created_at

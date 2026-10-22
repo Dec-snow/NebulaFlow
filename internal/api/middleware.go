@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -49,6 +50,60 @@ func corsMiddleware(origins string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// ---------- 访问日志 ----------
+
+// accessLogSink 是访问日志的输出目标（可注入，测试用）。
+var accessLogSink = func(msg string) { log.Print(msg) }
+
+// accessLogMiddleware 输出结构化访问日志：method / path / status / latency / user_id。
+//
+// 为什么不用 gin.Logger()：那是非结构化的文本行，且不记录"是谁"——
+// 而排查"哪个用户在哪个接口上慢"恰恰需要 user 维度。这里的顺序约定：
+// 访问日志放在 authMiddleware **之后**注册（Router 中），这样能拿到用户；
+// 放在 metricsMiddleware 之后共享同一个计时起点没有意义，各自计时即可。
+//
+// 路径用 c.FullPath()（路由模板）：与 metrics 同一口径，避免 /api/tasks/12
+// 这类路径把日志与指标的聚合维度炸掉；404（无路由）时 FullPath 为空，退回原始路径。
+func accessLogMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		p := c.FullPath()
+		if p == "" {
+			p = c.Request.URL.Path
+		}
+		user := "-"
+		if u := getUser(c); u != nil {
+			user = strconvInt(u.ID)
+		}
+		accessLogSink(fmt.Sprintf("[api] %s %s -> %d %s user=%s ip=%s",
+			c.Request.Method, p, c.Writer.Status(),
+			time.Since(start).Round(time.Microsecond), user, c.ClientIP()))
+	}
+}
+
+func strconvInt(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
 }
 
 // ---------- 可观测性中间件 ----------
