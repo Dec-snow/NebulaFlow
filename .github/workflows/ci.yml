@@ -270,42 +270,72 @@ jobs:
             #   2. **要重试**。`nginx -s reload` 立刻返回，旧 worker 处理完手头连接
             #      才退出，紧接着的请求可能仍落到用旧配置的 worker 上。
             #      真正的配置错误会一直失败，不会被这几十秒的重试掩盖。
-            echo "[deploy] --- public checks ---"
-            healthz_ok=""
-            for i in $(seq 1 15); do
-              code=$(curl -sS -m 15 -D /tmp/nf-health.h -o /tmp/nf-health.txt -w '%{http_code}' "$BASE_URL/healthz" 2>/dev/null || echo "000")
-              ct=$(grep -i '^content-type:' /tmp/nf-health.h 2>/dev/null | tr -d '\r' | head -1 || true)
-              if [ "$code" = "200" ] && printf '%s' "$ct" | grep -qi 'application/json'; then
-                healthz_ok=1
-                break
-              fi
-              echo "[deploy] /healthz -> $code ${ct:-<无 content-type>}，2s 后重试（第 $i 次）"
-              sleep 2
-            done
-            if [ -z "$healthz_ok" ]; then
-              echo "--- headers ---"; cat /tmp/nf-health.h 2>/dev/null || true
-              echo "--- body ---"; head -c 400 /tmp/nf-health.txt 2>/dev/null || true
-              fail "$BASE_URL/healthz 期望 200 且 content-type 为 application/json（拿到 HTML 说明请求没走到后端）"
-            fi
-            echo "[deploy] GET /healthz -> 200 $ct  $(head -c 200 /tmp/nf-health.txt)"
+            #
+            # ---- 自愈式公网检查（restore-and-verify）--------------------------
+            # 背景：这台服务器上还有另一套部署流水线（blog/acg-api，从别的机器 SSH 上来），
+            # 它曾把 /etc/nginx/conf.d/nebula.conf 覆盖成纯静态配置（/api 反代被删），
+            # 把 /var/www/nebula/releases 软链结构替换成平铺目录 —— 线上 API 全部落回
+            # 静态站 index.html。于是公网断言在这里升级为"检查 → 若被覆盖则恢复 → 再检查"：
+            #   - 每轮检查失败且现有 conf 里没有 /api 反代时，把 staging 的 nebula.conf
+            #     装回去（root 兼容平铺/软链两种 web 根）并 reload，然后重试；
+            #   - 若 conf 明明有反代却仍然失败，说明是别的问题，照旧 fail-fast。
+            # 这让本流水线对"被别的部署覆盖"具备自愈能力，而不是只能报错等人。
+            public_check() {
+              # $1 = url, $2 = 期望状态码, $3 = 期望 content-type 子串, $4 = 输出文件
+              local code ct
+              code=$(curl -sS -m 15 -D "$4.h" -o "$4" -w '%{http_code}' "$1" 2>/dev/null || echo "000")
+              ct=$(grep -i '^content-type:' "$4.h" 2>/dev/null | tr -d '\r' | head -1 || true)
+              [ "$code" = "$2" ] && printf '%s' "$ct" | grep -qi "$3"
+            }
 
-            api_ok=""
-            for i in $(seq 1 15); do
-              code=$(curl -sS -m 15 -D /tmp/nf-wf.h -o /tmp/nf-wf.json -w '%{http_code}' "$BASE_URL/api/workflows" 2>/dev/null || echo "000")
-              if [ "$code" = "401" ] && grep -qi '^content-type: application/json' /tmp/nf-wf.h; then
-                api_ok=1
-                break
+            restore_proxy() {
+              # 根目录自适应：现在线上 web 根既可能是 /var/www/nebula（平铺，外部流水线做的）
+              # 也可能是 /var/www/nebula/current（本流水线的版本化软链）。装配置前按实际情况改写。
+              local webroot="/var/www/nebula/current"
+              if [ ! -e "$webroot" ]; then webroot="/var/www/nebula"; fi
+              echo "[deploy][self-heal] 现有 nebula.conf 缺少 /api 反代 —— 恢复（webroot=$webroot）"
+              $SUDO sed "s|root /var/www/nebula/current;|root $webroot;|" "$STAGING/nebula.conf" \
+                | $SUDO tee /etc/nginx/conf.d/nebula.conf >/dev/null
+              $SUDO nginx -t || fail "恢复后的 nebula.conf 语法错误"
+              $SUDO nginx -s reload
+              sleep 1
+            }
+
+            verify_public() {
+              local i
+              for i in $(seq 1 10); do
+                if public_check "$BASE_URL/healthz" 200 application/json /tmp/nf-health.txt; then
+                  echo "[deploy] GET /healthz -> 200 JSON"
+                else
+                  local code ct
+                  code=$(head -1 /tmp/nf-health.txt.h 2>/dev/null || true)
+                  ct=$(grep -i '^content-type:' /tmp/nf-health.txt.h 2>/dev/null || true)
+                  echo "[deploy] /healthz 未通过（$code $ct），2s 后重试（第 $i 次）"
+                  sleep 2
+                  continue
+                fi
+                if public_check "$BASE_URL/api/workflows" 401 application/json /tmp/nf-wf.json; then
+                  echo "[deploy] GET /api/workflows (no token) -> 401 JSON  $(head -c 120 /tmp/nf-wf.json)"
+                  return 0
+                fi
+                echo "[deploy] /api/workflows 未通过，重试"
+                sleep 2
+              done
+              return 1
+            }
+
+            echo "[deploy] --- public checks (self-healing) ---"
+            if ! verify_public; then
+              # 失败先诊断：现有 conf 里有没有 /api 反代？
+              if ! $SUDO grep -q 'location ^~ /api/' /etc/nginx/conf.d/nebula.conf 2>/dev/null; then
+                restore_proxy
+                verify_public || fail "恢复反代后公网断言仍失败（见上方输出）"
+              else
+                echo "--- nebula.conf ---"; $SUDO cat /etc/nginx/conf.d/nebula.conf | head -60
+                echo "--- healthz headers/body ---"; head -c 400 /tmp/nf-health.txt.h 2>/dev/null; head -c 400 /tmp/nf-health.txt 2>/dev/null
+                fail "公网断言失败，但 nebula.conf 里 /api 反代仍在 —— 请人工排查"
               fi
-              echo "[deploy] /api/workflows -> $code，2s 后重试（第 $i 次）"
-              sleep 2
-            done
-            if [ -z "$api_ok" ]; then
-              echo "--- headers ---"; cat /tmp/nf-wf.h 2>/dev/null || true
-              echo "--- body（前 400 字节）---"; head -c 400 /tmp/nf-wf.json 2>/dev/null || true
-              fail "$BASE_URL/api/workflows 期望 401 + application/json（实际 $code）—— 是不是落回了静态站？"
             fi
-            head -c 1 /tmp/nf-wf.json | grep -q '{' || { head -c 200 /tmp/nf-wf.json; fail "/api/workflows 的响应体不是 JSON 对象"; }
-            echo "[deploy] GET /api/workflows (no token) -> 401 JSON  $(head -c 200 /tmp/nf-wf.json)"
 
             # ---- d. 前端：版本化目录 + 原子软链 -----------------------------
             echo "[deploy] === 3/4 frontend switch ==="
